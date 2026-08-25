@@ -51,14 +51,16 @@ def _fresh(meta_path: Path, ttl: float) -> bool:
     if ttl <= 0 or not meta_path.exists():
         return False
     try:
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return False
     return (time.time() - float(meta.get("fetched_at", 0))) < ttl
 
 
 def _stamp(meta_path: Path, url: str) -> None:
-    meta_path.write_text(json.dumps({"url": url, "fetched_at": time.time()}))
+    meta_path.write_text(
+        json.dumps({"url": url, "fetched_at": time.time()}), encoding="utf-8"
+    )
 
 
 def cache_age(url: str, ext: str = ".json") -> float | None:
@@ -67,7 +69,7 @@ def cache_age(url: str, ext: str = ".json") -> float | None:
     if not meta_path.exists():
         return None
     try:
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
     return time.time() - float(meta.get("fetched_at", 0))
@@ -94,7 +96,7 @@ async def fetch_json(
 
     if _fresh(meta_path, ttl) and data_path.exists():
         try:
-            return json.loads(data_path.read_text())
+            return json.loads(data_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass  # corrupt cache entry; fall through and refetch
 
@@ -107,7 +109,7 @@ async def fetch_json(
     except FetchError:
         if data_path.exists():
             log.warning("using stale cache for %s", url)
-            return json.loads(data_path.read_text())
+            return json.loads(data_path.read_text(encoding="utf-8"))
         raise
     finally:
         if owned:
@@ -116,7 +118,7 @@ async def fetch_json(
     if payload is None and allow_404:
         return None
 
-    data_path.write_text(json.dumps(payload))
+    data_path.write_text(json.dumps(payload), encoding="utf-8")
     _stamp(meta_path, url)
     return payload
 

@@ -18,6 +18,8 @@ It then does two jobs:
 
 ## Quick start
 
+**macOS / Linux**
+
 ```bash
 git clone https://github.com/that-coder-guy/fantasypicker.git
 cd fantasypicker
@@ -25,6 +27,39 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
 fantasypicker serve --open
+```
+
+**Windows** (PowerShell)
+
+```powershell
+git clone https://github.com/that-coder-guy/fantasypicker.git
+cd fantasypicker
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+
+fantasypicker serve --open
+```
+
+Use `.venv\Scripts\activate.bat` instead if you are in `cmd.exe`. If PowerShell
+refuses to run the activation script, `Set-ExecutionPolicy -Scope Process
+RemoteSigned` for that session, or skip activation entirely and call
+`.\.venv\Scripts\fantasypicker.exe serve --open` directly.
+
+Windows needs nothing beyond a stock Python install — every dependency ships a
+Windows wheel, so there is no compiler step, and `uvicorn[standard]` correctly
+omits `uvloop` on Windows. Python **3.10–3.13** works; 3.12 is the safest bet
+for LightGBM and pyarrow wheel coverage. Get it from python.org or
+`winget install Python.Python.3.12` — the Microsoft Store build works too but
+sandboxes its file writes, which makes the cache directory harder to find.
+
+The cache and trained models live in `C:\Users\<you>\.fantasypicker`
+(`fantasypicker where` prints the exact paths) — about 30 MB of NFL data plus a
+~17 MB model per scoring configuration. Set `FANTASYPICKER_HOME` to move it,
+which is worth doing if your user folder is synced to OneDrive:
+
+```powershell
+$env:FANTASYPICKER_HOME = "D:\fantasypicker"
 ```
 
 Then paste your league ID — the long number in your Sleeper league URL:
@@ -46,7 +81,8 @@ later start is instant. To do it up front instead of in the browser:
 fantasypicker warm 1048273661924872192 --username yourname
 ```
 
-Everything lands in `~/.fantasypicker` (`fantasypicker where` prints the paths).
+Everything lands in `~/.fantasypicker` (`fantasypicker where` prints the paths):
+about 30 MB of cached NFL data and a ~17 MB model per scoring configuration.
 Nothing is uploaded anywhere; there is no account, no key, and no server but
 your own.
 
@@ -315,6 +351,10 @@ pip install -e ".[dev]"
 pytest                          # 81 tests, no network access required
 fantasypicker serve --reload
 ```
+
+The same three commands work on Windows once the venv is activated. The suite is
+platform-independent — no shell-outs, no POSIX paths, and the cache is
+redirected to a temp directory for each test.
 
 Tests use stubbed Sleeper responses and synthetic projections; nothing in the
 suite touches the network, and the cache is redirected to a temp directory.

@@ -34,6 +34,13 @@ def main(argv: list[str] | None = None) -> int:
     warm.add_argument("--username", default=None)
     warm.add_argument("-v", "--verbose", action="store_true")
 
+    leagues = sub.add_parser(
+        "leagues", help="List the Sleeper leagues a username belongs to, with their IDs."
+    )
+    leagues.add_argument("username")
+    leagues.add_argument("--season", type=int, default=None)
+    leagues.add_argument("-v", "--verbose", action="store_true")
+
     sub.add_parser("where", help="Print the cache and model directories.")
 
     args = parser.parse_args(argv)
@@ -56,7 +63,43 @@ def main(argv: list[str] | None = None) -> int:
     if command == "warm":
         return _warm(args.league_id, args.username)
 
+    if command == "leagues":
+        return _leagues(args.username, args.season)
+
     return _serve(args)
+
+
+def _leagues(username: str, season: int | None) -> int:
+    """Print a user's leagues and IDs — the fastest way to diagnose a bad ID."""
+    import asyncio
+
+    from .service import service
+
+    async def run() -> int:
+        try:
+            data = await service.find_leagues(username, season)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        user = data["user"]
+        print(f"{user['display_name'] or user['username']} (user_id {user['user_id']})")
+        rows = data["leagues"] or data["previous_season_leagues"]
+        if not rows:
+            print(
+                f"  No leagues found for {data['season']} or the season before.\n"
+                "  If your league is on ESPN, Yahoo, or NFL.com, this app cannot "
+                "read it — Sleeper is the only platform supported.",
+                file=sys.stderr,
+            )
+            return 1
+        if not data["leagues"]:
+            print(f"  (no {data['season']} leagues; showing the previous season)")
+        for league in rows:
+            print(f"  {league['league_id']}  {league['name']}")
+            print(f"      {league['teams']} teams · {league['scoring']} · {league['status']}")
+        return 0
+
+    return asyncio.run(run())
 
 
 def _serve(args: argparse.Namespace) -> int:

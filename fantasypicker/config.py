@@ -28,7 +28,11 @@ class Settings:
         default_factory=lambda: tuple(range(2016, 2027))
     )
     #: Cache lifetimes, seconds.
-    ttl_players: int = 24 * 3600  # Sleeper's 5MB player dump, refreshed daily
+    #: Sleeper's player file is ~5MB and they ask that it not be hammered, but it
+    #: is also the only place injury designations live — and those move all week.
+    #: Four hours is the compromise: six pulls a day, and a Sunday-morning
+    #: downgrade is picked up before kickoff.
+    ttl_players: int = 4 * 3600
     ttl_league: int = 15 * 60
     ttl_matchups: int = 60
     ttl_draft: int = 5  # live draft polling wants this near-realtime

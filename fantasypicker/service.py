@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -34,12 +35,21 @@ from .engine.correlations import CorrelationModel, estimate_correlations
 from .engine.matchup import MatchupAnalysis, analyze_matchup
 from .model import dataset as dataset_module
 from .model.availability import AvailabilityModel, fit_availability
-from .model.predict import ProjectionSet, project_season, project_week
+from .model.predict import (
+    ProjectionSet,
+    apply_availability,
+    project_season,
+    project_week,
+)
 from .model.train import ProjectionModel, load_model, train_model
 from .sleeper.client import SleeperClient
-from .sleeper.league import LeagueContext, load_league
+from .sleeper.league import LeagueContext, load_league, refresh_teams
+from .sleeper.scoring import ScoringRules
 
 log = logging.getLogger(__name__)
+
+#: Sleeper is re-polled at most this often, however many requests arrive.
+REFRESH_INTERVAL = 30.0
 
 
 class NotReady(RuntimeError):
@@ -91,13 +101,78 @@ class PickerService:
     weekly_projections: dict[int, ProjectionSet] = field(default_factory=dict)
 
     status: LoadStatus = field(default_factory=LoadStatus)
+    #: When Sleeper was last re-polled for rosters and injury status.
+    last_refresh: float | None = None
     _warm_task: asyncio.Task | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     # -- connection --------------------------------------------------------- #
 
+    async def find_leagues(
+        self, username: str, season: int | str | None = None
+    ) -> dict[str, Any]:
+        """Every league a Sleeper username belongs to, so nobody has to hunt for an ID.
+
+        A league ID is an eighteen-digit number that only appears in a browser
+        URL — invisible if you use the phone app, and easy to confuse with a
+        draft ID. A username is something people know. This also answers the
+        harder question by elimination: if the username resolves but has no
+        leagues for the season, the league is not on Sleeper at all.
+        """
+        username = username.strip().lstrip("@")
+        async with SleeperClient() as client:
+            user = await client.user(username)
+            if not user or not user.get("user_id"):
+                raise ValueError(
+                    f"Sleeper has no user called {username!r}. This is the username "
+                    "you log in with, not your team name."
+                )
+            state = await client.state()
+            season = season or state.get("season") or current_nfl_season()
+            leagues = await client.user_leagues(str(user["user_id"]), season)
+            # Sleeper only returns the requested season, so an off-by-one year
+            # looks identical to "no leagues". Check the previous one too.
+            previous: list[dict] = []
+            if not leagues:
+                previous = await client.user_leagues(
+                    str(user["user_id"]), int(season) - 1
+                )
+
+        def summarise(rows: list[dict], year: int | str) -> list[dict[str, Any]]:
+            out = []
+            for row in rows or []:
+                scoring = ScoringRules.from_league(row)
+                positions = row.get("roster_positions") or []
+                out.append(
+                    {
+                        "league_id": row.get("league_id"),
+                        "name": row.get("name"),
+                        "season": str(year),
+                        "teams": row.get("total_rosters"),
+                        "scoring": scoring.describe(),
+                        "status": row.get("status"),
+                        "superflex": any(
+                            p in {"SUPER_FLEX", "QB_FLEX"} for p in positions
+                        ),
+                        "avatar": row.get("avatar"),
+                    }
+                )
+            return out
+
+        return {
+            "user": {
+                "user_id": user.get("user_id"),
+                "username": user.get("username") or username,
+                "display_name": user.get("display_name"),
+            },
+            "season": str(season),
+            "leagues": summarise(leagues, season),
+            "previous_season_leagues": summarise(previous, int(season) - 1),
+        }
+
     async def connect(self, league_id: str, username: str | None = None) -> dict[str, Any]:
         """Load the league itself — fast, and enough to render the whole UI shell."""
+        league_id = _clean_league_id(league_id)
         async with SleeperClient() as client:
             state = await client.state()
             self.players = await client.players()
@@ -127,11 +202,58 @@ class PickerService:
         self.season_projections = None
         self.weekly_projections = {}
         self.status = LoadStatus(stage="connected", detail=league.name, progress=0.05)
+        self.last_refresh = time.time()
         return self.describe(state)
 
     async def _lookup_user(self, username: str) -> dict | None:
         async with SleeperClient() as client:
             return await client.user(username)
+
+    # -- staying current ---------------------------------------------------- #
+
+    async def refresh_live(self, *, force: bool = False) -> dict[str, bool]:
+        """Re-pull the things that move during a week.
+
+        Called before every question the app answers, throttled so a burst of
+        requests costs one round trip. Two things are refreshed: the rosters
+        (a waiver claim, a trade, a drop) and Sleeper's player file, which is
+        where injury designations live. Neither needs the model to be rebuilt —
+        the projections are conditional on playing, and availability is applied
+        on top of them.
+        """
+        if self.league is None:
+            return {"rosters": False, "players": False}
+        age = time.time() - (self.last_refresh or 0.0)
+        if not force and age < REFRESH_INTERVAL:
+            return {"rosters": False, "players": False}
+        self.last_refresh = time.time()
+
+        changed = {"rosters": False, "players": False}
+        try:
+            async with SleeperClient() as client:
+                # An explicit refresh bypasses the disk cache; the throttled
+                # background one is happy to be served from it.
+                changed["rosters"] = await refresh_teams(
+                    client, self.league, fresh=force
+                )
+                players = await client.players(fresh=force)
+        except FetchError as exc:
+            # Never fail a page because a refresh could not reach Sleeper; the
+            # previous state is stale but still useful.
+            log.warning("live refresh failed, serving cached state: %s", exc)
+            return changed
+
+        if players and players is not self.players:
+            self.players = players
+        if self.availability is not None:
+            for projections in self.weekly_projections.values():
+                if apply_availability(projections, self.availability, self.players):
+                    changed["players"] = True
+            if self.season_projections is not None:
+                apply_availability(
+                    self.season_projections, self.availability, self.players
+                )
+        return changed
 
     def describe(self, state: dict | None = None) -> dict[str, Any]:
         league = self.league
@@ -320,6 +442,7 @@ class PickerService:
         opponent_mode: str = "auto",
     ) -> MatchupAnalysis:
         self._require_ready()
+        await self.refresh_live()
         assert self.league is not None
         league = self.league
         week = int(week or league.current_week)
@@ -354,6 +477,7 @@ class PickerService:
         self, *, roster_id: int | None = None, top_n: int = 8
     ) -> dict[str, Any]:
         self._require_ready()
+        await self.refresh_live()
         assert self.league is not None and self.season_projections is not None
         league = self.league
 
@@ -458,6 +582,7 @@ class PickerService:
 
     async def waivers(self, week: int | None = None, *, roster_id: int | None = None) -> dict[str, Any]:
         self._require_ready()
+        await self.refresh_live()
         assert self.league is not None and self.season_projections is not None
         league = self.league
         week = int(week or league.current_week)
@@ -586,6 +711,20 @@ class PickerService:
             "tier": int(row.get("tier", 0)),
             "bye_week": None if pd.isna(row.get("bye_week")) else int(row.get("bye_week")),
         }
+
+
+def _clean_league_id(raw: str) -> str:
+    """Accept a pasted Sleeper URL as readily as a bare ID.
+
+    People copy the whole address far more often than they copy the number out
+    of the middle of it, and rejecting that is a self-inflicted support burden.
+    """
+    text = str(raw).strip()
+    match = re.search(r"(?:leagues?|draft)/(?:nfl/)?(\d{6,25})", text)
+    if match:
+        return match.group(1)
+    digits = re.findall(r"\d{6,25}", text)
+    return digits[0] if digits else text
 
 
 def _row_to_dict(row: pd.Series) -> dict[str, Any]:

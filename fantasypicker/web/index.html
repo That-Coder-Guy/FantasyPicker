@@ -16,6 +16,10 @@
       <p class="tagline" id="league-line">Not connected</p>
     </div>
   </div>
+  <div class="live-state" id="live-state" hidden>
+    <span class="dot" id="live-dot"></span>
+    <span id="live-label">live</span>
+  </div>
   <nav class="tabs" id="tabs" hidden>
     <button class="tab" data-view="draft">Draft</button>
     <button class="tab" data-view="matchup">Matchup</button>
@@ -31,22 +35,34 @@
     <div class="card connect-card">
       <h2>Connect your league</h2>
       <p class="muted">
-        Everything comes from your Sleeper league ID — rosters, scoring settings,
-        weekly matchups, and your opponent's lineup. Nothing to type in by hand.
+        Everything comes from Sleeper — rosters, scoring settings, weekly
+        matchups, and your opponent's lineup. Nothing to type in by hand.
       </p>
-      <form id="connect-form">
+      <form id="lookup-form">
         <label>
-          League ID
-          <input id="league-id" inputmode="numeric" placeholder="1048273661924872192" required>
-          <small>The long number in your league's Sleeper URL.</small>
+          Sleeper username
+          <input id="username" placeholder="yourname" autocomplete="username" required>
+          <small>The name you log in with, not your team name.</small>
         </label>
-        <label>
-          Sleeper username <span class="muted">(optional)</span>
-          <input id="username" placeholder="yourname" autocomplete="username">
-          <small>Used only to work out which team is yours.</small>
-        </label>
-        <button type="submit" class="primary">Connect</button>
+        <button type="submit" class="primary">Find my leagues</button>
       </form>
+      <p id="lookup-error" class="error" hidden></p>
+      <div id="league-choices" class="team-grid" hidden></div>
+
+      <details id="manual-connect">
+        <summary class="muted small">Enter a league ID instead</summary>
+        <form id="connect-form">
+          <label>
+            League ID or league URL
+            <input id="league-id" placeholder="https://sleeper.com/leagues/1048273661924872192/team" required>
+            <small>
+              The long number in your league's Sleeper URL — pasting the whole
+              address works too. A draft ID or user ID will not.
+            </small>
+          </label>
+          <button type="submit" class="primary">Connect</button>
+        </form>
+      </details>
       <p id="connect-error" class="error" hidden></p>
     </div>
 

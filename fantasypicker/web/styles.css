@@ -52,6 +52,11 @@ h3 { font-size: .92rem; text-transform: uppercase; letter-spacing: .05em; color:
 .logo { font-size: 1.6rem; }
 .tagline { margin: 0; font-size: .8rem; color: var(--muted); }
 
+.live-state { display: flex; align-items: center; gap: .4rem; font-size: .76rem; color: var(--muted); margin-left: auto; }
+.live-state .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--good); }
+.live-state[data-mode="syncing"] .dot { background: var(--warn); }
+.live-state[data-mode="stale"] .dot { background: var(--bad); }
+
 .tabs { display: flex; gap: .25rem; flex-wrap: wrap; }
 .tab {
   background: none; border: 1px solid transparent; color: var(--muted);

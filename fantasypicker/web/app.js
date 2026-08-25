@@ -11,6 +11,7 @@ const state = {
   boardPosition: null,
   boardRows: [],
   draftTimer: null,
+  refreshTimer: null,
 };
 
 /* ------------------------------------------------------------------ utils */
@@ -68,6 +69,14 @@ function showError(node, error) {
 
 /* ------------------------------------------------------------------- tabs */
 
+const LOADERS = {
+  draft: loadDraft,
+  matchup: loadMatchup,
+  board: loadBoard,
+  waivers: loadWaivers,
+  model: loadModel,
+};
+
 function setView(view) {
   state.view = view;
   document.querySelectorAll(".view").forEach((section) => {
@@ -76,15 +85,159 @@ function setView(view) {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.classList.toggle("active", tab.dataset.view === view);
   });
-  const loaders = { draft: loadDraft, matchup: loadMatchup, board: loadBoard, waivers: loadWaivers, model: loadModel };
-  if (loaders[view]) loaders[view]();
+  if (LOADERS[view]) LOADERS[view]();
+  scheduleAutoRefresh();
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => setView(tab.dataset.view));
 });
 
+/* ----------------------------------------------------------- auto-refresh */
+
+/* How often each view re-asks the server, in seconds. The server re-polls
+ * Sleeper at most every 30s regardless, so these are about how quickly a change
+ * that already reached the server reaches the screen. The draft board is the
+ * one place seconds matter; the model card never changes at all. */
+const REFRESH_SECONDS = { draft: 20, matchup: 90, board: 300, waivers: 180, model: 0 };
+
+function scheduleAutoRefresh() {
+  clearInterval(state.refreshTimer);
+  const seconds = REFRESH_SECONDS[state.view] || 0;
+  if (!seconds || !state.league || !state.status || !state.status.ready) return;
+  state.refreshTimer = setInterval(() => {
+    // Never poll a tab nobody is looking at — it wastes Sleeper's bandwidth and
+    // the browser throttles background timers anyway.
+    if (document.hidden) return;
+    refreshCurrentView({ quiet: true });
+  }, seconds * 1000);
+}
+
+async function refreshCurrentView({ quiet = false } = {}) {
+  if (!state.league || !state.status || !state.status.ready) return;
+  setLiveState("syncing");
+  try {
+    const result = await api("/api/refresh", { method: "POST" });
+    if (result.league) applyLeague(result.league);
+    if (LOADERS[state.view]) await LOADERS[state.view]();
+    setLiveState("live", result.changed);
+  } catch (error) {
+    setLiveState("stale");
+    if (!quiet) throw error;
+  }
+}
+
+function setLiveState(mode, changed) {
+  const wrap = $("live-state");
+  if (!wrap) return;
+  wrap.hidden = false;
+  wrap.dataset.mode = mode;
+  const labels = {
+    live: "up to date",
+    syncing: "checking Sleeper…",
+    stale: "Sleeper unreachable — showing cached",
+  };
+  let label = labels[mode] || mode;
+  if (mode === "live" && changed && (changed.rosters || changed.players)) {
+    label = changed.rosters ? "rosters updated" : "injury status updated";
+  }
+  $("live-label").textContent = label;
+}
+
+// A tab left open overnight should not show yesterday's rosters the moment it
+// is focused again.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshCurrentView({ quiet: true });
+});
+window.addEventListener("focus", () => refreshCurrentView({ quiet: true }));
+
 /* ---------------------------------------------------------------- connect */
+
+$("lookup-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.target.querySelector("button");
+  const username = $("username").value.trim();
+  button.disabled = true;
+  $("lookup-error").hidden = true;
+  try {
+    const data = await api("/api/leagues", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    });
+    renderLeagueChoices(data, username);
+  } catch (error) {
+    $("lookup-error").textContent = error.message;
+    $("lookup-error").hidden = false;
+    $("league-choices").hidden = true;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+function renderLeagueChoices(data, username) {
+  const container = $("league-choices");
+  container.innerHTML = "";
+  container.hidden = false;
+
+  const leagues = data.leagues || [];
+  const previous = data.previous_season_leagues || [];
+  if (!leagues.length && !previous.length) {
+    container.append(
+      el(
+        "p",
+        "muted small",
+        `Sleeper knows ${data.user.display_name || username}, but has no ` +
+          `${data.season} leagues for them. If your league is on ESPN, Yahoo, or ` +
+          `NFL.com, this app cannot read it — Sleeper is the only platform wired up.`
+      )
+    );
+    return;
+  }
+
+  const add = (rows, note) => {
+    if (!rows.length) return;
+    if (note) container.append(el("p", "muted small", note));
+    rows.forEach((league) => {
+      const button = el("button", "team-btn");
+      button.append(el("strong", null, league.name || league.league_id));
+      const bits = [
+        `${league.teams} teams`,
+        league.scoring,
+        league.superflex ? "superflex" : null,
+        league.status && league.status !== "in_season" ? league.status : null,
+      ].filter(Boolean);
+      button.append(el("small", null, bits.join(" · ")));
+      button.addEventListener("click", () => connectTo(league.league_id, username));
+      container.append(button);
+    });
+  };
+
+  add(leagues, null);
+  add(
+    previous,
+    `No ${data.season} leagues yet — these are from ${data.season - 1}. ` +
+      "Projections will still be for the current season."
+  );
+}
+
+async function connectTo(leagueId, username) {
+  $("connect-error").hidden = true;
+  try {
+    const data = await api("/api/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ league_id: leagueId, username: username || null }),
+    });
+    applyLeague(data.league);
+    $("league-choices").hidden = true;
+    $("loading-card").hidden = false;
+    pollStatus();
+  } catch (error) {
+    $("connect-error").textContent = error.message;
+    $("connect-error").hidden = false;
+  }
+}
 
 $("connect-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -162,6 +315,8 @@ async function pollStatus() {
     if (data.status.ready) {
       $("loading-card").hidden = true;
       if (state.view === "connect") setView("draft");
+      else scheduleAutoRefresh();
+      setLiveState("live");
       return;
     }
   } catch (error) {
@@ -172,12 +327,16 @@ async function pollStatus() {
 
 /* ------------------------------------------------------------------ draft */
 
-$("draft-refresh").addEventListener("click", () => loadDraft());
+$("draft-refresh").addEventListener("click", () => refreshCurrentView());
 $("draft-autorefresh").addEventListener("change", (event) => {
   clearInterval(state.draftTimer);
   // Sleeper's pick feed is cached for a few seconds server-side, so polling
   // faster than this would just re-read the same response.
-  if (event.target.checked) state.draftTimer = setInterval(loadDraft, 6000);
+  if (event.target.checked) {
+    state.draftTimer = setInterval(() => {
+      if (!document.hidden) refreshCurrentView({ quiet: true });
+    }, 6000);
+  }
 });
 
 async function loadDraft() {
@@ -285,7 +444,7 @@ function renderRuns(runs) {
 
 /* ---------------------------------------------------------------- matchup */
 
-$("matchup-refresh").addEventListener("click", () => loadMatchup());
+$("matchup-refresh").addEventListener("click", () => refreshCurrentView());
 $("matchup-week").addEventListener("change", () => loadMatchup());
 $("opponent-mode").addEventListener("change", () => loadMatchup());
 
@@ -531,7 +690,7 @@ function rangeCell(floor, mid, ceiling, scale) {
 
 /* ---------------------------------------------------------------- waivers */
 
-$("waivers-refresh").addEventListener("click", () => loadWaivers());
+$("waivers-refresh").addEventListener("click", () => refreshCurrentView());
 
 async function loadWaivers() {
   const table = $("waivers-table");
@@ -754,6 +913,7 @@ async function openPlayer(sleeperId) {
       applyLeague(data.league);
       state.status = data.status;
       if (data.status.ready) {
+        setLiveState("live");
         setView("draft");
       } else {
         $("loading-card").hidden = false;

@@ -30,8 +30,13 @@ app = FastAPI(title="FantasyPicker", version=__version__)
 
 
 class ConnectRequest(BaseModel):
-    league_id: str = Field(..., description="Sleeper league ID from the league URL")
+    league_id: str = Field(..., description="Sleeper league ID, or a pasted league URL")
     username: str | None = Field(None, description="Your Sleeper username, to find your team")
+
+
+class LeagueLookupRequest(BaseModel):
+    username: str = Field(..., description="Sleeper username you log in with")
+    season: int | None = Field(None, description="Defaults to the current season")
 
 
 class TeamRequest(BaseModel):
@@ -61,6 +66,15 @@ async def _fetch_error_handler(_request, exc: FetchError) -> JSONResponse:
 # --------------------------------------------------------------------------- #
 
 
+@app.post("/api/leagues")
+async def find_leagues(request: LeagueLookupRequest) -> dict[str, Any]:
+    """List a Sleeper user's leagues, so nobody has to dig out a league ID."""
+    try:
+        return await service.find_leagues(request.username, request.season)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/connect")
 async def connect(request: ConnectRequest) -> dict[str, Any]:
     """Attach to a Sleeper league and start loading projections behind it."""
@@ -70,6 +84,15 @@ async def connect(request: ConnectRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     service.start_warmup()
     return {"league": summary, "status": service.status.as_dict()}
+
+
+@app.post("/api/refresh")
+async def refresh() -> dict[str, Any]:
+    """Re-poll Sleeper for rosters and injury status right now."""
+    if service.league is None:
+        raise HTTPException(status_code=409, detail="Connect to a league first.")
+    changed = await service.refresh_live(force=True)
+    return {"changed": changed, "league": service.describe()}
 
 
 @app.get("/api/status")

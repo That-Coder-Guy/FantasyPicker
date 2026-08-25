@@ -231,6 +231,10 @@ def project_week(
         "opp_fp_allowed_rel",
         "depth_rank",
         "games_played_to_date",
+        # Carried so availability can be recomputed later without re-running the
+        # model — see :func:`apply_availability`.
+        "injury_severity",
+        "practice_limitation",
         "p_play",
         "proj_mean",
         "median",
@@ -249,6 +253,33 @@ def project_week(
         .reset_index(drop=True)
     )
     return ProjectionSet(frame, model.quantiles, season, week, scoring)
+
+
+def apply_availability(
+    projections: ProjectionSet,
+    availability: AvailabilityModel,
+    sleeper_players: dict[str, dict] | None,
+) -> bool:
+    """Recompute ``p_play`` from fresh Sleeper player data, in place.
+
+    Injury designations move all week — a Wednesday questionable becomes a
+    Sunday-morning out — while the model's view of how a player performs *given
+    that he plays* does not. Splitting the two means a status change is a
+    millisecond of arithmetic over a cached frame instead of a re-projection,
+    so the app can pick it up on every request. Returns True if anything moved.
+    """
+    frame = projections.frame
+    if frame.empty:
+        return False
+    updated = _availability_column(frame, availability, sleeper_players)
+    previous = frame.get("p_play")
+    if previous is not None and np.allclose(
+        previous.to_numpy(dtype=float), updated.to_numpy(dtype=float), atol=1e-9
+    ):
+        return False
+    frame["p_play"] = updated
+    frame["exp_points"] = frame["proj_mean"] * frame["p_play"]
+    return True
 
 
 def project_season(

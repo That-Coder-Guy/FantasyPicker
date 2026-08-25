@@ -63,13 +63,15 @@ class SleeperClient:
         """``{"season": "2026", "week": 3, "season_type": "regular", ...}``"""
         return await self._get("/state/nfl", self._settings.ttl_state) or {}
 
-    async def players(self) -> dict[str, dict]:
+    async def players(self, *, fresh: bool = False) -> dict[str, dict]:
         """The full NFL player dictionary keyed by Sleeper player_id.
 
-        This is a ~5MB response; Sleeper asks that it be pulled at most once a
-        day, which the cache TTL enforces.
+        This is a ~5MB response, so it is cached hard; it is also the only place
+        injury designations live, so ``fresh`` exists for the moment a user
+        explicitly asks to re-check before kickoff.
         """
-        return await self._get("/players/nfl", self._settings.ttl_players) or {}
+        ttl = 0 if fresh else self._settings.ttl_players
+        return await self._get("/players/nfl", ttl) or {}
 
     async def trending(self, kind: str = "add", hours: int = 24, limit: int = 50) -> list[dict]:
         path = f"/players/nfl/trending/{kind}?lookback_hours={hours}&limit={limit}"
@@ -94,11 +96,16 @@ class SleeperClient:
     async def league(self, league_id: str) -> dict | None:
         return await self._get(f"/league/{league_id}", self._settings.ttl_league)
 
-    async def league_users(self, league_id: str) -> list[dict]:
-        return await self._get(f"/league/{league_id}/users", self._settings.ttl_league) or []
+    async def league_users(self, league_id: str, *, fresh: bool = False) -> list[dict]:
+        ttl = 0 if fresh else self._settings.ttl_league
+        return await self._get(f"/league/{league_id}/users", ttl) or []
 
-    async def rosters(self, league_id: str) -> list[dict]:
-        return await self._get(f"/league/{league_id}/rosters", self._settings.ttl_matchups) or []
+    async def rosters(self, league_id: str, *, fresh: bool = False) -> list[dict]:
+        """Every team's players. ``fresh`` skips the disk cache entirely, which
+        is what an explicit "refresh" from the UI has to do — otherwise a click
+        can be answered from a copy up to a minute old."""
+        ttl = 0 if fresh else self._settings.ttl_matchups
+        return await self._get(f"/league/{league_id}/rosters", ttl) or []
 
     async def matchups(self, league_id: str, week: int) -> list[dict]:
         return (

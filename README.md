@@ -1,8 +1,8 @@
 # FantasyPicker
 
-A draft board and lineup optimiser for **Sleeper** fantasy football leagues. Point
-it at your league ID and it reads your roster, your league's scoring rules, and —
-crucially — **your opponent's roster**, every week, without anyone typing a
+A draft board and lineup optimiser for **Sleeper** fantasy football leagues. Give
+it your Sleeper username and it reads your roster, your league's scoring rules,
+and — crucially — **your opponent's roster**, every week, without anyone typing a
 player name in by hand.
 
 It then does two jobs:
@@ -41,6 +41,31 @@ pip install -e .
 fantasypicker serve --open
 ```
 
+Then type your **Sleeper username** — the one you log in with, not your team
+name — and pick your league from the list. That is the whole setup; the league
+ID, your team, and your opponent all follow from it.
+
+If you would rather paste a league ID, open "Enter a league ID instead". Both
+the bare number and the whole URL work:
+
+```
+https://sleeper.com/leagues/1048273661924872192/team
+                            ^^^^^^^^^^^^^^^^^^^
+```
+
+Note that a **draft ID is not a league ID** — `sleeper.com/draft/nfl/<id>` is a
+different number, and it is the most common reason a paste is rejected. The
+username route sidesteps this entirely. From a terminal:
+
+```bash
+fantasypicker leagues yourname     # prints every league and its ID
+```
+
+If that command finds your user but lists no leagues, your league is not on
+Sleeper — see [Limits worth knowing](#limits-worth-knowing).
+
+### Windows notes
+
 Use `.venv\Scripts\activate.bat` instead if you are in `cmd.exe`. If PowerShell
 refuses to run the activation script, `Set-ExecutionPolicy -Scope Process
 RemoteSigned` for that session, or skip activation entirely and call
@@ -61,16 +86,6 @@ which is worth doing if your user folder is synced to OneDrive:
 ```powershell
 $env:FANTASYPICKER_HOME = "D:\fantasypicker"
 ```
-
-Then paste your league ID — the long number in your Sleeper league URL:
-
-```
-https://sleeper.com/leagues/1048273661924872192/team
-                            ^^^^^^^^^^^^^^^^^^^
-```
-
-Add your Sleeper username too and it works out which team is yours; otherwise
-you pick it from a list.
 
 The first league you connect takes **three to five minutes**: it downloads
 eleven seasons of NFL play data and trains a model against your league's exact
@@ -296,6 +311,29 @@ Five tabs:
 Clicking any player anywhere opens their projection, game context, and last
 twenty games.
 
+### Staying current
+
+The page keeps itself up to date; there is no need to reload or to keep a second
+browser open on Sleeper. A dot in the header says whether it is synced,
+checking, or unable to reach Sleeper.
+
+Two things are re-pulled: **rosters** (a waiver claim, a trade, a drop) and
+Sleeper's **player file**, which is where injury designations live. Neither
+requires the model to be rebuilt — the projections are conditional on a player
+suiting up, and availability is applied on top, so a Sunday-morning downgrade is
+arithmetic over a cached frame rather than a re-projection.
+
+| When | What happens |
+| --- | --- |
+| Draft tab open | Re-checks every 20s; the **Live refresh** toggle drops that to 6s for an active draft |
+| Matchup tab open | Every 90s |
+| Waivers / Board | Every 3 / 5 minutes |
+| Tab refocused | Immediately — a window left open overnight does not show yesterday's rosters |
+| **Refresh** button | Immediately, bypassing the disk cache entirely |
+
+The server throttles its own calls to Sleeper to one round trip per 30 seconds
+however many requests arrive, and background tabs are never polled.
+
 ---
 
 ## API
@@ -303,8 +341,10 @@ twenty games.
 The web app is a client of a plain JSON API, so it is scriptable:
 
 ```
+POST /api/leagues       {username, season?} -> that user's leagues and IDs
 POST /api/connect       {league_id, username?}
 GET  /api/status        loading progress
+POST /api/refresh       re-poll Sleeper for rosters and injury status now
 POST /api/team          {roster_id}
 GET  /api/draft         live draft recommendations
 GET  /api/board         full ranked board  ?position=RB&limit=200
@@ -321,6 +361,16 @@ while the model trains, rather than blocking.
 ---
 
 ## Limits worth knowing
+
+- **Sleeper only.** ESPN, Yahoo, and NFL.com leagues cannot be read. This is not
+  an oversight so much as a consequence of how those platforms work: Sleeper
+  publishes a documented read API that needs no authentication, which is what
+  makes "look up my opponent's roster" a single unauthenticated call. ESPN's
+  equivalent is undocumented and needs your `espn_s2` and `SWID` cookies for a
+  private league; Yahoo's requires registering an OAuth app and a browser
+  consent flow; NFL.com has no public read path at all. Each is a real project
+  rather than a config switch. If your league is on one of them, say so and it
+  can be built — ESPN is the least painful of the three.
 
 - **Weekly fantasy football is mostly noise.** The model beats a rolling average
   by 10–14%. It will still tell you to start someone who scores three points.
@@ -348,7 +398,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 81 tests, no network access required
+pytest                          # 97 tests, no network access required
 fantasypicker serve --reload
 ```
 

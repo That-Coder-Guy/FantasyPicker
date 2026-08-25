@@ -8,10 +8,36 @@ what removes the need to type an opponent's roster in by hand.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from .client import SleeperClient
 from .scoring import ScoringRules
+
+
+class LeagueNotFound(ValueError):
+    """Sleeper has no league with this ID.
+
+    Carries enough detail for the UI to explain the two things that actually go
+    wrong: the number is a draft or user ID rather than a league ID, or the
+    league lives on a different platform entirely.
+    """
+
+    def __init__(self, league_id: str) -> None:
+        self.league_id = league_id
+        looks_numeric = str(league_id).isdigit()
+        hint = (
+            "Sleeper league IDs are 18-19 digit numbers — the one in "
+            "sleeper.com/leagues/<this-number>/team. A draft ID or a user ID "
+            "will not work here."
+            if looks_numeric
+            else "That does not look like a Sleeper league ID at all; they are "
+            "long numbers with no letters or slashes."
+        )
+        super().__init__(
+            f"Sleeper has no league with ID {league_id!r}. {hint} "
+            "Enter your Sleeper username instead and pick the league from the list."
+        )
 
 #: Sleeper slot name -> the fantasy positions that may fill it.
 SLOT_ELIGIBILITY: dict[str, frozenset[str]] = {
@@ -249,27 +275,11 @@ def _parse_slots(roster_positions: list[str] | None) -> tuple[list[RosterSlot], 
     return slots, bench
 
 
-async def load_league(
-    client: SleeperClient,
-    league_id: str,
-    *,
-    week: int | None = None,
-    username: str | None = None,
-    user_id: str | None = None,
-) -> LeagueContext:
-    """Build a :class:`LeagueContext` from the Sleeper API."""
-    bundle = await client.league_bundle(league_id, week=None)
-    league = bundle["league"] or {}
-    if not league:
-        raise ValueError(
-            f"Sleeper returned no league for id {league_id!r}. "
-            "Check the ID — it is the long number in the league's URL."
-        )
-    state = await client.state()
-
-    users_by_id = {u.get("user_id"): u for u in bundle["users"]}
+def build_teams(rosters: list[dict], users: list[dict]) -> dict[int, Team]:
+    """Turn Sleeper's roster and user lists into :class:`Team` objects."""
+    users_by_id = {u.get("user_id"): u for u in users}
     teams: dict[int, Team] = {}
-    for row in bundle["rosters"]:
+    for row in rosters:
         roster_id = int(row.get("roster_id"))
         owner_id = row.get("owner_id")
         user = users_by_id.get(owner_id, {})
@@ -291,7 +301,49 @@ async def load_league(
             + float(settings.get("fpts_decimal") or 0) / 100.0,
             avatar=user.get("avatar"),
         )
+    return teams
 
+
+async def refresh_teams(
+    client: SleeperClient, league: LeagueContext, *, fresh: bool = False
+) -> bool:
+    """Re-pull rosters and users into an existing context.
+
+    Rosters change between page loads — a waiver clears, a trade goes through,
+    someone drops an injured back. Without this the app would keep answering
+    from whatever the rosters looked like when the league was first connected,
+    which is the sort of staleness that is invisible until it gives you bad
+    advice. Returns True when anything actually changed.
+    """
+    rosters, users = await asyncio.gather(
+        client.rosters(league.league_id, fresh=fresh),
+        client.league_users(league.league_id, fresh=fresh),
+    )
+    if not rosters:
+        return False
+    before = {rid: tuple(sorted(t.players)) for rid, t in league.teams.items()}
+    league.teams = build_teams(rosters, users or [])
+    league._matchup_cache.clear()
+    after = {rid: tuple(sorted(t.players)) for rid, t in league.teams.items()}
+    return before != after
+
+
+async def load_league(
+    client: SleeperClient,
+    league_id: str,
+    *,
+    week: int | None = None,
+    username: str | None = None,
+    user_id: str | None = None,
+) -> LeagueContext:
+    """Build a :class:`LeagueContext` from the Sleeper API."""
+    bundle = await client.league_bundle(league_id, week=None)
+    league = bundle["league"] or {}
+    if not league:
+        raise LeagueNotFound(league_id)
+    state = await client.state()
+
+    teams = build_teams(bundle["rosters"], bundle["users"])
     slots, bench = _parse_slots(league.get("roster_positions"))
     season = int(league.get("season") or state.get("season") or 0)
     current_week = int(week or state.get("week") or 1) or 1

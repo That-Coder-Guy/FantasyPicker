@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FantasyPicker</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🏈</span>
+    <div>
+      <h1>FantasyPicker</h1>
+      <p class="tagline" id="league-line">Not connected</p>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs" hidden>
+    <button class="tab" data-view="draft">Draft</button>
+    <button class="tab" data-view="matchup">Matchup</button>
+    <button class="tab" data-view="board">Board</button>
+    <button class="tab" data-view="waivers">Waivers</button>
+    <button class="tab" data-view="model">Model</button>
+  </nav>
+</header>
+
+<main>
+  <!-- Connect ---------------------------------------------------------- -->
+  <section id="view-connect" class="view active">
+    <div class="card connect-card">
+      <h2>Connect your league</h2>
+      <p class="muted">
+        Everything comes from your Sleeper league ID — rosters, scoring settings,
+        weekly matchups, and your opponent's lineup. Nothing to type in by hand.
+      </p>
+      <form id="connect-form">
+        <label>
+          League ID
+          <input id="league-id" inputmode="numeric" placeholder="1048273661924872192" required>
+          <small>The long number in your league's Sleeper URL.</small>
+        </label>
+        <label>
+          Sleeper username <span class="muted">(optional)</span>
+          <input id="username" placeholder="yourname" autocomplete="username">
+          <small>Used only to work out which team is yours.</small>
+        </label>
+        <button type="submit" class="primary">Connect</button>
+      </form>
+      <p id="connect-error" class="error" hidden></p>
+    </div>
+
+    <div class="card" id="loading-card" hidden>
+      <h3 id="loading-stage">Loading</h3>
+      <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+      <p class="muted" id="loading-detail"></p>
+      <p class="muted small">
+        The first run downloads eleven seasons of NFL play data and trains a
+        model against your league's exact scoring rules. Later runs reuse it.
+      </p>
+    </div>
+
+    <div class="card" id="team-card" hidden>
+      <h3>Which team is yours?</h3>
+      <div id="team-list" class="team-grid"></div>
+    </div>
+  </section>
+
+  <!-- Draft ------------------------------------------------------------ -->
+  <section id="view-draft" class="view">
+    <div class="toolbar">
+      <div id="draft-status" class="pill-row"></div>
+      <label class="toggle">
+        <input type="checkbox" id="draft-autorefresh"> Live refresh
+      </label>
+      <button id="draft-refresh" class="ghost">Refresh</button>
+    </div>
+    <div class="split">
+      <div class="card grow">
+        <h2>On the clock</h2>
+        <div id="draft-recs" class="rec-list"></div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h3>Your roster</h3>
+          <div id="draft-roster" class="chip-list"></div>
+          <p class="muted small" id="draft-needs"></p>
+        </div>
+        <div class="card">
+          <h3>Falling off before your next pick</h3>
+          <div id="draft-runs" class="bar-list"></div>
+          <p class="muted small">
+            How much value each position loses between now and your next turn,
+            weighted by how likely each player is to still be there.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Matchup ---------------------------------------------------------- -->
+  <section id="view-matchup" class="view">
+    <div class="toolbar">
+      <label>Week <input type="number" id="matchup-week" min="1" max="18" style="width:4.5rem"></label>
+      <label>Opponent lineup
+        <select id="opponent-mode">
+          <option value="auto">As set (fall back to best)</option>
+          <option value="declared">Exactly as set</option>
+          <option value="optimal">Their best possible</option>
+        </select>
+      </label>
+      <button id="matchup-refresh" class="ghost">Refresh</button>
+    </div>
+    <div class="card headline" id="matchup-headline"></div>
+    <div class="split">
+      <div class="card grow">
+        <h3>Recommended lineup</h3>
+        <table class="lineup" id="matchup-lineup"></table>
+        <div id="leverage-block"></div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <h3>Best swaps</h3>
+          <div id="matchup-swaps" class="swap-list"></div>
+          <p class="muted small">
+            Change in win probability against this specific opponent, from the
+            same simulation — not a generic ranking.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Opponent</h3>
+          <table class="lineup compact" id="matchup-opponent"></table>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Every player on your roster</h3>
+      <div class="table-wrap"><table class="data" id="matchup-players"></table></div>
+    </div>
+  </section>
+
+  <!-- Board ------------------------------------------------------------ -->
+  <section id="view-board" class="view">
+    <div class="toolbar">
+      <div class="pill-row" id="board-filters"></div>
+      <input id="board-search" placeholder="Search players" class="search">
+    </div>
+    <div class="card">
+      <div class="table-wrap tall"><table class="data" id="board-table"></table></div>
+    </div>
+  </section>
+
+  <!-- Waivers ---------------------------------------------------------- -->
+  <section id="view-waivers" class="view">
+    <div class="toolbar">
+      <button id="waivers-refresh" class="ghost">Refresh</button>
+    </div>
+    <div class="card">
+      <h2>Free agents worth adding</h2>
+      <div class="table-wrap"><table class="data" id="waivers-table"></table></div>
+      <p class="muted small" id="waivers-notes"></p>
+    </div>
+  </section>
+
+  <!-- Model ------------------------------------------------------------ -->
+  <section id="view-model" class="view">
+    <div class="card" id="model-card"></div>
+  </section>
+</main>
+
+<div id="player-modal" class="modal" hidden>
+  <div class="modal-body">
+    <button class="close" id="modal-close">×</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

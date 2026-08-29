@@ -10,6 +10,7 @@ blocking for three minutes, so the UI can show progress instead of a dead tab.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,25 @@ log = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).parent / "web"
 
-app = FastAPI(title="FantasyPicker", version=__version__)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Reopen whatever league was in use last time the app ran.
+
+    Starting the server and landing on an empty form, session after session,
+    is the difference between a tool and a chore. If the league has since been
+    deleted or the network is down, this fails quietly back to the connect
+    screen rather than refusing to start.
+    """
+    try:
+        if await service.reopen_last():
+            service.start_warmup()
+    except Exception as exc:  # never let a bad state file block startup
+        log.warning("could not reopen the last league: %s", exc)
+    yield
+
+
+app = FastAPI(title="FantasyPicker", version=__version__, lifespan=lifespan)
 
 
 class ConnectRequest(BaseModel):
@@ -86,6 +105,21 @@ async def connect(request: ConnectRequest) -> dict[str, Any]:
     return {"league": summary, "status": service.status.as_dict()}
 
 
+@app.get("/api/known")
+async def known_leagues() -> dict[str, Any]:
+    """Leagues this machine has connected to before, newest first."""
+    return {
+        "leagues": service.known_leagues(),
+        "active_league_id": service.state.active_league_id,
+    }
+
+
+@app.delete("/api/known/{league_id}")
+async def forget_league(league_id: str) -> dict[str, Any]:
+    """Drop a league from the remembered list (does not touch Sleeper)."""
+    return {"forgotten": service.forget_league(league_id), "leagues": service.known_leagues()}
+
+
 @app.post("/api/refresh")
 async def refresh() -> dict[str, Any]:
     """Re-poll Sleeper for rosters and injury status right now."""
@@ -97,10 +131,9 @@ async def refresh() -> dict[str, Any]:
 
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
-    return {
-        "status": service.status.as_dict(),
-        "league": service.describe() if service.league else {"connected": False},
-    }
+    # ``describe`` carries the remembered leagues in both the connected and
+    # disconnected shapes, so a cold start still offers them on the front page.
+    return {"status": service.status.as_dict(), "league": service.describe()}
 
 
 @app.post("/api/team")

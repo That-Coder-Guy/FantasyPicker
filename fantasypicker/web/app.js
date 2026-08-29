@@ -223,6 +223,12 @@ function renderLeagueChoices(data, username) {
 
 async function connectTo(leagueId, username) {
   $("connect-error").hidden = true;
+  // Switching leagues invalidates every loaded view, so go back to the shell
+  // and let the loading card explain what is happening.
+  clearInterval(state.refreshTimer);
+  clearInterval(state.draftTimer);
+  state.status = null;
+  setView("connect");
   try {
     const data = await api("/api/connect", {
       method: "POST",
@@ -264,9 +270,63 @@ $("connect-form").addEventListener("submit", async (event) => {
   }
 });
 
+/* --------------------------------------------------------- remembered leagues */
+
+function renderRemembered(leagues) {
+  const wrap = $("remembered");
+  const list = $("remembered-list");
+  const rows = (leagues || []).filter((lg) => !lg.is_active);
+  list.innerHTML = "";
+  wrap.hidden = rows.length === 0;
+  rows.forEach((league) => {
+    const button = el("button", "team-btn");
+    button.append(el("strong", null, league.name || league.league_id));
+    const bits = [
+      league.my_team || (league.teams ? `${league.teams} teams` : null),
+      league.scoring,
+      // Reopening a league whose model is already trained is instant; one that
+      // needs a rebuild is a few minutes, and saying so up front is kinder.
+      league.model_ready ? "ready" : "needs training",
+    ].filter(Boolean);
+    button.append(el("small", null, bits.join(" · ")));
+    button.addEventListener("click", () => connectTo(league.league_id, league.username));
+    list.append(button);
+  });
+}
+
+function renderSwitcher(league) {
+  const known = (league && league.known_leagues) || [];
+  const switcher = $("switcher");
+  switcher.hidden = known.length < 2;
+  const menu = $("switcher-menu");
+  menu.innerHTML = "";
+  known.forEach((entry) => {
+    const row = el("button", `switcher-item${entry.is_active ? " active" : ""}`);
+    row.append(el("strong", null, entry.name || entry.league_id));
+    const bits = [entry.my_team, entry.scoring, entry.model_ready ? null : "needs training"]
+      .filter(Boolean)
+      .join(" · ");
+    row.append(el("small", null, bits));
+    row.addEventListener("click", () => {
+      menu.hidden = true;
+      if (!entry.is_active) connectTo(entry.league_id, entry.username);
+    });
+    menu.append(row);
+  });
+}
+
+$("switcher-toggle").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = $("switcher-menu");
+  menu.hidden = !menu.hidden;
+});
+document.addEventListener("click", () => ($("switcher-menu").hidden = true));
+
 function applyLeague(league) {
   state.league = league;
+  renderRemembered(league && league.known_leagues);
   if (!league || !league.connected) return;
+  renderSwitcher(league);
   $("tabs").hidden = false;
   const bits = [
     league.name,
@@ -909,6 +969,7 @@ async function openPlayer(sleeperId) {
 (async function init() {
   try {
     const data = await api("/api/status");
+    renderRemembered(data.league && data.league.known_leagues);
     if (data.league && data.league.connected) {
       applyLeague(data.league);
       state.status = data.status;

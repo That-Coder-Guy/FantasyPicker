@@ -45,6 +45,7 @@ from .model.train import ProjectionModel, load_model, train_model
 from .sleeper.client import SleeperClient
 from .sleeper.league import LeagueContext, load_league, refresh_teams
 from .sleeper.scoring import ScoringRules
+from .store import AppState, RememberedLeague, load_state, save_state
 
 log = logging.getLogger(__name__)
 
@@ -101,10 +102,19 @@ class PickerService:
     weekly_projections: dict[int, ProjectionSet] = field(default_factory=dict)
 
     status: LoadStatus = field(default_factory=LoadStatus)
+    #: Remembered leagues; read from disk on first access, not at import, so
+    #: importing the package never touches the filesystem.
+    _state: AppState | None = None
     #: When Sleeper was last re-polled for rosters and injury status.
     last_refresh: float | None = None
     _warm_task: asyncio.Task | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    @property
+    def state(self) -> AppState:
+        if self._state is None:
+            self._state = load_state()
+        return self._state
 
     # -- connection --------------------------------------------------------- #
 
@@ -178,13 +188,22 @@ class PickerService:
             self.players = await client.players()
             league = await load_league(client, league_id, username=username)
 
+        remembered = self.state.get(league_id)
         self.league_id = league_id
-        self.username = username
+        self.username = username or (remembered.username if remembered else None)
         self.league = league
         self.crosswalk = load_crosswalk(self.players)
-        if username:
-            user = await self._lookup_user(username)
+        if self.username:
+            user = await self._lookup_user(self.username)
             self.user_id = (user or {}).get("user_id")
+        elif remembered is not None:
+            self.user_id = remembered.user_id
+
+        # A team chosen by hand last time is remembered; Sleeper's own answer
+        # (from the username) wins when it has one.
+        if league.my_roster_id is None and remembered is not None:
+            if remembered.my_roster_id in league.teams:
+                league.my_roster_id = remembered.my_roster_id
 
         try:
             self.ranks = load_expert_ranks(
@@ -203,6 +222,7 @@ class PickerService:
         self.weekly_projections = {}
         self.status = LoadStatus(stage="connected", detail=league.name, progress=0.05)
         self.last_refresh = time.time()
+        self._remember()
         return self.describe(state)
 
     async def _lookup_user(self, username: str) -> dict | None:
@@ -258,7 +278,7 @@ class PickerService:
     def describe(self, state: dict | None = None) -> dict[str, Any]:
         league = self.league
         if league is None:
-            return {"connected": False}
+            return {"connected": False, "known_leagues": self.known_leagues()}
         my_team = league.my_team
         return {
             "connected": True,
@@ -276,6 +296,7 @@ class PickerService:
             "idp": league.is_idp,
             "my_roster_id": league.my_roster_id,
             "my_team": my_team.label if my_team else None,
+            "known_leagues": self.known_leagues(),
             "teams_list": [
                 {
                     "roster_id": t.roster_id,
@@ -290,8 +311,80 @@ class PickerService:
         }
 
     def set_my_team(self, roster_id: int) -> None:
-        if self.league is not None:
-            self.league.my_roster_id = int(roster_id)
+        if self.league is None:
+            return
+        self.league.my_roster_id = int(roster_id)
+        self._remember()
+
+    # -- memory ------------------------------------------------------------- #
+
+    def _remember(self) -> None:
+        """Write what we now know about this league to disk.
+
+        Called after connecting and after the team is chosen, which are exactly
+        the two moments a user would be annoyed to have to repeat.
+        """
+        league = self.league
+        if league is None:
+            return
+        from .model.train import scoring_key  # local: keeps LightGBM out of import
+
+        team = league.my_team
+        self.state.remember(
+            RememberedLeague(
+                league_id=league.league_id,
+                name=league.name,
+                season=str(league.season or ""),
+                username=self.username,
+                user_id=self.user_id,
+                my_roster_id=league.my_roster_id,
+                my_team=team.label if team else None,
+                scoring=league.scoring.describe(),
+                scoring_key=scoring_key(league.scoring),
+                teams=league.team_count,
+                superflex=league.is_superflex,
+            )
+        )
+        save_state(self.state)
+
+    def known_leagues(self) -> list[dict[str, Any]]:
+        """Remembered leagues, most recent first, for the switcher."""
+        return [
+            {
+                **league.as_dict(),
+                "is_active": league.league_id == self.league_id,
+                # Whether reopening this one would be instant or a full rebuild.
+                "model_ready": _model_cached(league.scoring_key),
+            }
+            for league in self.state.recent()
+        ]
+
+    def forget_league(self, league_id: str) -> bool:
+        forgotten = self.state.forget(str(league_id))
+        if forgotten:
+            save_state(self.state)
+        return forgotten
+
+    async def reopen_last(self) -> dict[str, Any] | None:
+        """Reconnect to whatever was open last time, if anything was.
+
+        This is what makes the app feel like it remembers: start the server and
+        it comes back to the league you were using, with your team already
+        selected, rather than to an empty form.
+        """
+        remembered = self.state.active
+        if remembered is None:
+            return None
+        try:
+            summary = await self.connect(remembered.league_id, remembered.username)
+        except (ValueError, FetchError) as exc:
+            # A league that has since been deleted, or no network on boot.
+            log.warning(
+                "could not reopen remembered league %s: %s", remembered.league_id, exc
+            )
+            return None
+        log.info("reopened %s", remembered.name or remembered.league_id)
+        return summary
 
     # -- warm-up ------------------------------------------------------------ #
 
@@ -339,9 +432,10 @@ class PickerService:
         self._set_stage("Loading eleven seasons of NFL box scores", 0.12)
         team_overrides = self._team_overrides()
         active = self._active_gsis_ids()
-        self.panel = dataset_module.build_panel(
+        self.panel = dataset_module.load_or_build_panel(
             league.scoring,
             seasons,
+            force=force,
             team_overrides=team_overrides,
             active_players=active,
         )
@@ -711,6 +805,13 @@ class PickerService:
             "tier": int(row.get("tier", 0)),
             "bye_week": None if pd.isna(row.get("bye_week")) else int(row.get("bye_week")),
         }
+
+
+def _model_cached(scoring_key: str) -> bool:
+    """Is there already a trained model on disk for this scoring configuration?"""
+    if not scoring_key:
+        return False
+    return (get_settings().model_dir / f"projection_{scoring_key}.joblib").exists()
 
 
 def _clean_league_id(raw: str) -> str:

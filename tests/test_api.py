@@ -52,8 +52,33 @@ class _StubCrosswalk:
 def test_status_before_connecting(client):
     http, _ = client
     payload = http.get("/api/status").json()
-    assert payload["league"] == {"connected": False}
+    assert payload["league"]["connected"] is False
     assert payload["status"]["ready"] is False
+    # Remembered leagues are offered even when nothing is connected — that is
+    # what the front page needs in order to show "pick up where you left off".
+    assert payload["league"]["known_leagues"] == []
+
+
+def test_remembered_leagues_are_offered_on_a_cold_start(client):
+    http, service = client
+    http.post("/api/connect", json={"league_id": "999", "username": "alice"})
+
+    # A brand new process, same machine: the state file is what carries over.
+    from fantasypicker.service import PickerService
+
+    fresh = PickerService()
+    known = fresh.known_leagues()
+    assert [lg["league_id"] for lg in known] == ["999"]
+    assert known[0]["my_team"] == "Alice's Aces"
+
+
+def test_forget_removes_a_remembered_league(client):
+    http, _ = client
+    http.post("/api/connect", json={"league_id": "999", "username": "alice"})
+    response = http.delete("/api/known/999")
+    assert response.status_code == 200
+    assert response.json()["forgotten"] is True
+    assert http.get("/api/known").json()["leagues"] == []
 
 
 def test_connect_returns_the_league_shape(client):

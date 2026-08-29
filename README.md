@@ -97,7 +97,8 @@ fantasypicker warm 1048273661924872192 --username yourname
 ```
 
 Everything lands in `~/.fantasypicker` (`fantasypicker where` prints the paths):
-about 30 MB of cached NFL data and a ~17 MB model per scoring configuration.
+about 30 MB of cached NFL data, a ~17 MB model and a cached panel per scoring
+configuration, and a small `state.json` remembering your leagues.
 Nothing is uploaded anywhere; there is no account, no key, and no server but
 your own.
 
@@ -311,6 +312,35 @@ Five tabs:
 Clicking any player anywhere opens their projection, game context, and last
 twenty games.
 
+### It remembers your leagues
+
+Connect once and the app reopens that league the next time you start it, with
+your team already selected. Everything worth remembering is stored **per
+league**, in `~/.fantasypicker/state.json`:
+
+- which team is yours — including a team you picked by hand, which is not
+  wiped by a later reconnect that has no username attached
+- the username the league was found under
+- the scoring fingerprint, which is how the app knows whether the trained model
+  on disk belongs to this league
+
+If you run more than one league, a **▾** next to the league name in the header
+switches between them, and the connect screen offers them under "Pick up where
+you left off". Each entry says whether reopening it is instant or needs a
+training run, so a switch is never a surprise.
+
+Two leagues that score identically share one trained model *and* one built
+panel — the common case if you run several half-PPR leagues. Switching between
+those is a few seconds. Switching to a league with genuinely different scoring
+means a rebuild, because the labels the model is fitted to are different.
+
+The built panel is cached too, so even a rebuild after a restart skips the
+two-minute assembly step as long as the cache is under twelve hours old.
+`POST /api/retrain` (or the Model tab's retrain) forces everything from scratch.
+
+Nothing here leaves your machine, and forgetting a league is one call:
+`DELETE /api/known/<league_id>`.
+
 ### Staying current
 
 The page keeps itself up to date; there is no need to reload or to keep a second
@@ -342,8 +372,10 @@ The web app is a client of a plain JSON API, so it is scriptable:
 
 ```
 POST /api/leagues       {username, season?} -> that user's leagues and IDs
+GET  /api/known         leagues this machine has connected to before
+DEL  /api/known/{id}    forget one
 POST /api/connect       {league_id, username?}
-GET  /api/status        loading progress
+GET  /api/status        loading progress + remembered leagues
 POST /api/refresh       re-poll Sleeper for rosters and injury status now
 POST /api/team          {roster_id}
 GET  /api/draft         live draft recommendations
@@ -398,7 +430,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 97 tests, no network access required
+pytest                          # 128 tests, no network access required
 fantasypicker serve --reload
 ```
 
@@ -417,6 +449,7 @@ fantasypicker/
   engine/      simulator, correlations, lineups, draft, waivers, matchup
   web/         the dashboard (no build step)
   service.py   the one object that holds a loaded league
+  store.py     remembered leagues, per league, on disk
   api.py       HTTP routes
 ```
 

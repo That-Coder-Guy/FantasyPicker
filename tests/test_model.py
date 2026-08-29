@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -136,6 +138,136 @@ def test_recalibration_is_a_no_op_when_calibration_is_already_good():
 
 
 # ------------------------------------------------------------- availability
+
+
+# -------------------------------------------------------------- panel cache
+
+
+def _fake_panel() -> pd.DataFrame:
+    """A panel with the dtype mix the real one has: floats, ints, and strings."""
+    return pd.DataFrame(
+        {
+            "gsis_id": ["00-001", "00-002", "LAR"],
+            "player_display_name": ["A Back", "A Receiver", "LA D/ST"],
+            "position": ["RB", "WR", "DST"],
+            "season": [2025, 2025, 2025],
+            "week": [1, 1, 1],
+            "played": [1, 1, 1],
+            "fantasy_points": [12.5, np.nan, 7.0],
+            "fantasy_points_r3": [np.nan, 8.25, 6.0],
+            "implied_total": [24.5, 24.5, 19.0],
+        }
+    )
+
+
+def test_panel_cache_round_trips_exactly(scoring, tmp_path):
+    from fantasypicker.model.dataset import load_or_build_panel, panel_path
+
+    seasons = (2024, 2025)
+    built = _fake_panel()
+    calls = {"n": 0}
+
+    def fake_build(*args, **kwargs):
+        calls["n"] += 1
+        return built
+
+    import fantasypicker.model.dataset as ds
+
+    original = ds.build_panel
+    ds.build_panel = fake_build
+    try:
+        first = load_or_build_panel(scoring, seasons)
+        second = load_or_build_panel(scoring, seasons)
+    finally:
+        ds.build_panel = original
+
+    assert calls["n"] == 1  # the second call came off disk
+    assert panel_path(scoring, seasons).exists()
+    # NaN placement and values must survive, or every rolling feature shifts.
+    pd.testing.assert_frame_equal(
+        first.reset_index(drop=True), second.reset_index(drop=True), check_dtype=False
+    )
+
+
+def test_panel_cache_is_keyed_by_scoring(scoring):
+    """Two leagues that score differently must not share a labelled panel."""
+    from fantasypicker.model.dataset import panel_path
+    from fantasypicker.sleeper.scoring import ScoringRules
+
+    from .conftest import HALF_PPR
+
+    full_ppr = ScoringRules.from_league({"scoring_settings": {**HALF_PPR, "rec": 1.0}})
+    assert panel_path(scoring, (2025,)) != panel_path(full_ppr, (2025,))
+    # ...and identical scoring must share one, which is the point.
+    same = ScoringRules.from_league({"scoring_settings": HALF_PPR})
+    assert panel_path(scoring, (2025,)) == panel_path(same, (2025,))
+
+
+def test_panel_cache_is_keyed_by_season_range(scoring):
+    from fantasypicker.model.dataset import panel_path
+
+    assert panel_path(scoring, (2024, 2025)) != panel_path(scoring, (2025,))
+
+
+def test_a_stale_panel_cache_is_rebuilt(scoring):
+    import os
+
+    import fantasypicker.model.dataset as ds
+
+    calls = {"n": 0}
+
+    def fake_build(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_panel()
+
+    original = ds.build_panel
+    ds.build_panel = fake_build
+    try:
+        ds.load_or_build_panel(scoring, (2025,))
+        path = ds.panel_path(scoring, (2025,))
+        old = time.time() - 48 * 3600
+        os.utime(path, (old, old))
+        ds.load_or_build_panel(scoring, (2025,), max_age_hours=12.0)
+    finally:
+        ds.build_panel = original
+
+    assert calls["n"] == 2
+
+
+def test_force_rebuilds_even_a_fresh_cache(scoring):
+    import fantasypicker.model.dataset as ds
+
+    calls = {"n": 0}
+
+    def fake_build(*args, **kwargs):
+        calls["n"] += 1
+        return _fake_panel()
+
+    original = ds.build_panel
+    ds.build_panel = fake_build
+    try:
+        ds.load_or_build_panel(scoring, (2025,))
+        ds.load_or_build_panel(scoring, (2025,), force=True)
+    finally:
+        ds.build_panel = original
+
+    assert calls["n"] == 2
+
+
+def test_a_corrupt_panel_cache_falls_back_to_rebuilding(scoring):
+    import fantasypicker.model.dataset as ds
+
+    path = ds.panel_path(scoring, (2025,))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not a parquet file")
+
+    original = ds.build_panel
+    ds.build_panel = lambda *a, **k: _fake_panel()
+    try:
+        panel = ds.load_or_build_panel(scoring, (2025,))
+    finally:
+        ds.build_panel = original
+    assert len(panel) == 3
 
 
 def test_availability_defaults_are_sane():

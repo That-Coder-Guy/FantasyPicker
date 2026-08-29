@@ -16,7 +16,11 @@ happens at the edges, in :mod:`fantasypicker.model.predict`.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -30,6 +34,7 @@ from ..data.nflverse import (
     load_weekly_stats,
     team_schedule,
 )
+from ..config import get_settings
 from ..sleeper.scoring import ScoringRules
 
 log = logging.getLogger(__name__)
@@ -696,6 +701,55 @@ def build_panel(
         int(panel["fantasy_points"].notna().sum()),
         panel["gsis_id"].nunique(),
     )
+    return panel
+
+
+def panel_path(scoring: ScoringRules, seasons: tuple[int, ...]) -> Path:
+    """Where a built panel is cached.
+
+    Keyed by the scoring fingerprint and the season range, because the labels —
+    and the rolling features derived from them — are league-specific. Two
+    leagues that score identically share one file, which is the common case for
+    anyone running more than one half-PPR league.
+    """
+    digest = hashlib.sha1(
+        (json.dumps(scoring.settings, sort_keys=True) + repr(seasons)).encode()
+    ).hexdigest()[:12]
+    return get_settings().model_dir / f"panel_{digest}.parquet"
+
+
+def load_or_build_panel(
+    scoring: ScoringRules,
+    seasons: tuple[int, ...],
+    *,
+    force: bool = False,
+    max_age_hours: float = 12.0,
+    **kwargs,
+) -> pd.DataFrame:
+    """Build the panel, or reuse a recent one from disk.
+
+    Assembling eleven seasons takes a couple of minutes, which is fine once and
+    grating every time the app is opened. The cached copy is used when it is
+    fresher than ``max_age_hours`` — long enough to cover a session, short
+    enough that a week's new results are picked up the next day.
+    """
+    path = panel_path(scoring, seasons)
+    if not force and path.exists():
+        age_hours = (time.time() - path.stat().st_mtime) / 3600.0
+        if age_hours < max_age_hours:
+            try:
+                panel = pd.read_parquet(path)
+                log.info("reusing cached panel from %s (%.1fh old)", path, age_hours)
+                return panel
+            except Exception as exc:
+                log.warning("could not read cached panel %s: %s", path, exc)
+
+    panel = build_panel(scoring, seasons, **kwargs)
+    try:
+        panel.to_parquet(path, index=False)
+        log.info("cached panel to %s", path)
+    except Exception as exc:  # a cache miss is survivable; a crash is not
+        log.warning("could not cache panel to %s: %s", path, exc)
     return panel
 
 

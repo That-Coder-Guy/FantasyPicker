@@ -15,6 +15,10 @@
       <h1>FantasyPicker</h1>
       <p class="tagline" id="league-line">Not connected</p>
     </div>
+    <div class="switcher" id="switcher" hidden>
+      <button class="switcher-toggle" id="switcher-toggle" title="Switch league">▾</button>
+      <div class="switcher-menu" id="switcher-menu" hidden></div>
+    </div>
   </div>
   <div class="live-state" id="live-state" hidden>
     <span class="dot" id="live-dot"></span>
@@ -34,6 +38,10 @@
   <section id="view-connect" class="view active">
     <div class="card connect-card">
       <h2>Connect your league</h2>
+      <div id="remembered" hidden>
+        <h3>Pick up where you left off</h3>
+        <div id="remembered-list" class="team-grid"></div>
+      </div>
       <p class="muted">
         Everything comes from Sleeper — rosters, scoring settings, weekly
         matchups, and your opponent's lineup. Nothing to type in by hand.

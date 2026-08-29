@@ -52,6 +52,24 @@ h3 { font-size: .92rem; text-transform: uppercase; letter-spacing: .05em; color:
 .logo { font-size: 1.6rem; }
 .tagline { margin: 0; font-size: .8rem; color: var(--muted); }
 
+.switcher { position: relative; }
+.switcher-toggle {
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+  border-radius: 8px; padding: .15rem .5rem; font-size: .8rem; line-height: 1.2;
+}
+.switcher-menu {
+  position: absolute; top: calc(100% + .35rem); left: 0; z-index: 40;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  min-width: 240px; padding: .3rem; box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+.switcher-item {
+  display: block; width: 100%; text-align: left; border: none; background: none;
+  padding: .4rem .55rem; border-radius: 8px;
+}
+.switcher-item:hover { background: var(--panel-2); }
+.switcher-item.active { background: var(--panel-2); }
+.switcher-item small { display: block; color: var(--muted); font-size: .74rem; }
+
 .live-state { display: flex; align-items: center; gap: .4rem; font-size: .76rem; color: var(--muted); margin-left: auto; }
 .live-state .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--good); }
 .live-state[data-mode="syncing"] .dot { background: var(--warn); }

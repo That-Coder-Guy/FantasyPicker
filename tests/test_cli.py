@@ -60,14 +60,16 @@ def test_doctor_flags_a_roster_whose_owner_is_missing(stub_sleeper, capsys):
     stub_sleeper(
         {
             "/v1/league/999/users": [{"user_id": "u1", "display_name": "alice"}],
-            "/v1/league/999/rosters": [{"roster_id": 5, "owner_id": "departed"}],
+            "/v1/league/999/rosters": [
+                {"roster_id": 5, "owner_id": "departed", "players": ["1"]}
+            ],
         }
     )
     assert cli.main(["doctor", "999"]) == 0
     captured = capsys.readouterr()
-    assert "no matching user" in captured.out
+    assert "no manager" in captured.out
     assert "'Team 5'" in captured.out
-    assert "orphaned" in captured.err
+    assert "abandoned" in captured.err
 
 
 def test_doctor_survives_users_with_missing_fields(stub_sleeper, capsys):
@@ -80,6 +82,25 @@ def test_doctor_survives_users_with_missing_fields(stub_sleeper, capsys):
     )
     assert cli.main(["doctor", "999"]) == 0
     assert "no user_id" in capsys.readouterr().out
+
+
+def test_doctor_explains_a_league_that_is_still_filling_up(capsys, stub_sleeper):
+    """The case that sent a real user hunting for a bug that was not there."""
+    stub_sleeper(
+        {
+            "/v1/league/999/users": [{"user_id": "u1", "display_name": "alice"}],
+            "/v1/league/999/rosters": [
+                {"roster_id": 1, "owner_id": "u1"},
+                {"roster_id": 2, "owner_id": None},
+                {"roster_id": 3, "owner_id": None},
+            ],
+        }
+    )
+    assert cli.main(["doctor", "999"]) == 0
+    out = capsys.readouterr().out
+    assert "nobody has joined this seat" in out
+    assert "2 of 3 seats have no manager yet" in out
+    assert "nothing to type in" in out
 
 
 def test_doctor_on_an_unknown_league_explains_rather_than_traces(stub_sleeper, capsys):

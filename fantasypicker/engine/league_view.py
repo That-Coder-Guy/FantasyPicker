@@ -250,7 +250,11 @@ def _build_team_view(
             opponent_roster_id=opponent_id,
             roster_size=0,
             draft_slot=draft_slot,
-            notes=["No players yet — this league has not drafted."],
+            notes=[
+                "Nobody has joined this seat yet."
+                if not team.claimed
+                else "No players yet — this league has not drafted."
+            ],
         )
 
     trust_declared = True

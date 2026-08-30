@@ -163,17 +163,34 @@ def _doctor(league_id: str) -> int:
         matched = sum(1 for r in rosters if r.get("owner_id") in known)
         print(f"\nrosters: {len(rosters)} · owner_id matches a user: {matched}")
         teams = build_teams(rosters, users)
+        empty_seats = 0
+        abandoned = 0
         for roster_id in sorted(teams):
             team = teams[roster_id]
-            flag = "" if team.owner_id in known else "  <-- no matching user"
+            if team.claimed:
+                flag = ""
+            elif team.players:
+                flag = "  <-- has players but no manager (abandoned)"
+                abandoned += 1
+            else:
+                flag = "  <-- nobody has joined this seat"
+                empty_seats += 1
             print(
                 f"  roster {roster_id:<3} owner={team.owner_id or 'none':<24} "
                 f"label={team.label!r}{flag}"
             )
-        if matched < len(rosters):
+
+        if empty_seats:
             print(
-                "\nRosters whose owner_id matches no user are orphaned teams. "
-                "Sleeper gives them no name, so they show as 'Team N'.",
+                f"\n{empty_seats} of {len(rosters)} seats have no manager yet — "
+                f"{len(users)} of {len(rosters)} spots in this league are filled. "
+                "There are no names to show for the empty ones, and nothing to "
+                "type in: each name appears on its own once someone joins.",
+            )
+        if abandoned:
+            print(
+                f"\n{abandoned} roster(s) hold players but have no owner. Those "
+                "are abandoned teams; Sleeper has no name for them.",
                 file=sys.stderr,
             )
         return 0

@@ -117,7 +117,11 @@ async def test_refresh_invalidates_the_matchup_cache():
 
 
 def test_build_teams_survives_a_roster_with_no_owner():
-    """Orphan teams are real in Sleeper — a manager leaves mid-season."""
+    """Orphan teams are real in Sleeper — a manager leaves mid-season.
+
+    A roster holding players is a team whoever owns it, so it keeps a team-ish
+    name rather than being called an empty seat.
+    """
     teams = build_teams([{"roster_id": 3, "owner_id": None, "players": ["1"]}], USERS)
     assert teams[3].label == "Team 3"
     assert teams[3].players == ["1"]
@@ -231,9 +235,16 @@ def test_an_orphaned_team_is_named_after_a_co_owner():
     assert teams[1].label == "Bob's Team"
 
 
-def test_a_truly_ownerless_team_still_gets_a_stable_label():
+def test_an_unjoined_seat_says_so_instead_of_looking_like_a_missing_name():
+    """A league still filling up has one ownerless, empty roster per free seat.
+
+    Calling that "Team 4" is indistinguishable from a name that failed to load,
+    which is precisely the false alarm this wording exists to prevent.
+    """
     teams = build_teams([{"roster_id": 4, "owner_id": None}], [])
-    assert teams[4].label == "Team 4"
+    assert teams[4].label == "Open seat 4"
+    assert teams[4].claimed is False
+    assert "joined" in teams[4].manager
 
 
 def test_users_without_an_id_are_ignored_rather_than_matching_a_null_owner():
@@ -242,7 +253,7 @@ def test_users_without_an_id_are_ignored_rather_than_matching_a_null_owner():
         [{"roster_id": 1, "owner_id": None}],
         [{"display_name": "ghost", "metadata": {"team_name": "Should Not Appear"}}],
     )
-    assert teams[1].label == "Team 1"
+    assert teams[1].label == "Open seat 1"
 
 
 def test_a_user_with_only_a_username_is_named_after_it():
@@ -293,12 +304,26 @@ def test_an_unmatched_owner_is_logged_rather_than_silently_renumbered(caplog):
     """
     with caplog.at_level("WARNING"):
         teams = build_teams(
-            [{"roster_id": 7, "owner_id": "ghost"}],
+            [{"roster_id": 7, "owner_id": "ghost", "players": ["1"]}],
             [{"user_id": "u1", "display_name": "alice"}],
         )
     assert teams[7].label == "Team 7"
     assert "no matching Sleeper user" in caplog.text
     assert "doctor" in caplog.text
+
+
+def test_empty_unjoined_seats_are_not_warned_about(caplog):
+    """The common case must stay quiet.
+
+    A 14-team league with two members has twelve ownerless rosters. Warning
+    about each one reports normal league-building as a fault.
+    """
+    with caplog.at_level("WARNING"):
+        build_teams(
+            [{"roster_id": i, "owner_id": None} for i in range(1, 13)],
+            [{"user_id": "u1", "display_name": "alice"}],
+        )
+    assert caplog.text == ""
 
 
 @pytest.mark.asyncio

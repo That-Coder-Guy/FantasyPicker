@@ -98,6 +98,7 @@ class Team:
     ties: int = 0
     points_for: float = 0.0
     avatar: str | None = None
+    claimed: bool = True
 
     @property
     def label(self) -> str:
@@ -105,15 +106,22 @@ class Team:
 
         Sleeper carries three candidate names and any of them can be blank: the
         custom team name (most managers never set one), the display name, and
-        the login username. Falling back through all three means the numeric
-        placeholder is reached only when Sleeper genuinely told us nothing.
+        the login username. Falling back through all three means a placeholder
+        is reached only when Sleeper genuinely told us nothing.
+
+        There are two ways to get there and they mean opposite things. A seat
+        nobody has joined yet has no name because there is no manager — normal
+        in a league that is still filling up, and worth saying outright, since
+        "Team 7" otherwise reads as a name that failed to load. A roster that
+        *has* players but no owner is an abandoned team, which is a real team
+        and keeps the numeric name.
         """
-        return (
-            self.team_name
-            or self.display_name
-            or self.username
-            or f"Team {self.roster_id}"
-        )
+        named = self.team_name or self.display_name or self.username
+        if named:
+            return named
+        if not self.claimed and not self.players:
+            return f"Open seat {self.roster_id}"
+        return f"Team {self.roster_id}"
 
     @property
     def manager(self) -> str:
@@ -122,7 +130,9 @@ class Team:
         Shown next to :attr:`label` so a custom team name still tells you who
         you are trading with.
         """
-        return self.display_name or self.username or "unclaimed"
+        if self.display_name or self.username:
+            return self.display_name or self.username
+        return "nobody has joined yet" if not self.players else "unclaimed"
 
     @property
     def record(self) -> str:
@@ -360,16 +370,18 @@ def build_teams(
             points_for=float(settings.get("fpts") or 0)
             + float(settings.get("fpts_decimal") or 0) / 100.0,
             avatar=user.get("avatar") or (prior.avatar if prior else None),
+            claimed=bool(user),
         )
-        if not user:
+        if not user and teams[roster_id].players:
             nameless.append(roster_id)
     if nameless and users:
-        # Sleeper answered with users, but none of them own these rosters. That
-        # is not a network problem, so the carry-forward above cannot help on a
-        # cold start — say so loudly rather than quietly showing "Team 4".
+        # Only rosters that hold players are worth a warning. A league still
+        # filling up has an unowned roster per empty seat, which is normal and
+        # not something to alarm anyone about; an *abandoned* roster is the odd
+        # one, because the carry-forward above cannot recover a name for it.
         log.warning(
-            "%d of %d rosters have no matching Sleeper user (roster_ids %s); "
-            "those teams fall back to a numeric name. Run "
+            "%d of %d rosters have players but no matching Sleeper user "
+            "(roster_ids %s); those teams fall back to a numeric name. Run "
             "`fantasypicker doctor <league_id>` to see what Sleeper returned.",
             len(nameless),
             len(rosters),

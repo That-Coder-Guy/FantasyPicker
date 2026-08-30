@@ -810,21 +810,23 @@ function renderTeams() {
     const points = declared ? team.declared_points : team.projected_points;
     const card = el("div", `card team-card${team.is_me ? " mine" : ""}`);
 
+    // Media-object header: the picture spans the whole identity block, so the
+    // record and matchup lines sit beside it instead of wrapping underneath.
     const head = el("div", "team-head");
-    const left = el("div");
+    head.append(teamAvatar(team.avatar, team.label, "lg"));
+    const identity = el("div", "team-identity");
     const title = el("div", "team-name");
-    title.append(teamAvatar(team.avatar, team.label, "lg"));
-    title.append(document.createTextNode(team.label));
+    title.append(el("span", "team-label", team.label));
     if (team.is_me) title.append(el("span", "tag", "you"));
-    left.append(title);
+    identity.append(title);
     const meta = [team.owner, team.record, `${fmt(team.points_for, 0)} pts for`]
       .filter(Boolean)
       .join(" · ");
-    left.append(el("div", "muted small", meta));
+    identity.append(el("div", "muted small", meta));
     if (team.opponent_label) {
-      left.append(el("div", "muted small", `vs ${team.opponent_label} this week`));
+      identity.append(el("div", "muted small", `vs ${team.opponent_label} this week`));
     }
-    head.append(left);
+    head.append(identity);
 
     const score = el("div", "team-score");
     if (undrafted) {

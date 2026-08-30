@@ -31,6 +31,7 @@ from .data.nflverse import current_nfl_season
 from .data.rankings import load_expert_ranks
 from .engine import draft as draft_engine
 from .engine import league_view
+from .engine import trades as trade_engine
 from .engine import waivers as waiver_engine
 from .engine.correlations import CorrelationModel, estimate_correlations
 from .engine.matchup import MatchupAnalysis, analyze_matchup
@@ -810,6 +811,78 @@ class PickerService:
             "droppable": report.droppable,
             "notes": report.notes,
         }
+
+    async def trades(
+        self,
+        *,
+        roster_id: int | None = None,
+        chains: bool = True,
+        max_package: int = 2,
+    ) -> dict[str, Any]:
+        """Mutually beneficial trades, and chains of them, for one roster."""
+        self._require_ready()
+        await self.refresh_live()
+        assert self.league is not None and self.season_projections is not None
+        league = self.league
+        roster_id = roster_id if roster_id is not None else league.my_roster_id
+        if roster_id is None:
+            raise ValueError("No team selected. Pick your team first.")
+
+        report = await asyncio.to_thread(
+            lambda: trade_engine.find_trades(
+                league,
+                self.season_projections,
+                my_roster_id=int(roster_id),
+                max_package=max_package,
+                chains=chains,
+            )
+        )
+        payload = report.as_dict()
+
+        # Decorate every id that appears anywhere with a display row, so the
+        # page never shows a raw sleeper_id.
+        ids: set[str] = set()
+
+        def collect(side: dict) -> None:
+            ids.update(side["gives"])
+            ids.update(side["adds"])
+            ids.update(side["drops"])
+
+        for trade in payload["trades"]:
+            collect(trade["me"])
+            collect(trade["them"])
+        for chain in payload["chains"]:
+            for step in chain["steps"]:
+                collect(step["me"])
+                collect(step["them"])
+
+        frame = self.season_projections.frame
+        column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
+        indexed = frame.set_index(frame["sleeper_id"].astype(str))
+        players: dict[str, dict[str, Any]] = {}
+        for pid in ids:
+            if pid in indexed.index:
+                row = indexed.loc[pid]
+                players[pid] = {
+                    "sleeper_id": pid,
+                    "name": str(row.get("name") or pid),
+                    "position": str(row.get("position") or "?"),
+                    "team": None if pd.isna(row.get("team")) else str(row.get("team")),
+                    "ros_points": round(float(row.get(column) or 0.0), 1),
+                }
+            else:
+                meta = self.players.get(pid, {})
+                players[pid] = {
+                    "sleeper_id": pid,
+                    "name": str(meta.get("full_name") or pid),
+                    "position": str(meta.get("position") or "?"),
+                    "team": meta.get("team"),
+                    "ros_points": 0.0,
+                }
+        payload["players"] = players
+        payload["my_roster_id"] = int(roster_id)
+        payload["my_team"] = league.teams[int(roster_id)].label if int(roster_id) in league.teams else None
+        return payload
 
     async def league_teams(self, week: int | None = None) -> dict[str, Any]:
         """Every team in the league with its lineup for the week."""

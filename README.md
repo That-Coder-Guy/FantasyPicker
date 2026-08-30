@@ -364,7 +364,7 @@ reversal are all handled.
 
 ## The app
 
-Five tabs:
+Seven tabs:
 
 - **Draft** — ranked recommendations with the reasoning spelled out, your
   roster, unfilled slots, and a chart of which positions fall off hardest before
@@ -389,6 +389,19 @@ Five tabs:
   the rest of the season and this week, with the drop candidate named. Sleeper's
   trending-adds count sits alongside as a crowd signal, clearly separate from the
   model's own view.
+- **Trades** — proposals the other manager should actually accept. A player's
+  value depends on the roster he lands on, so trades exist that help both
+  sides; the engine values every roster as the best lineup it could field over
+  the rest of the season, searches 1-for-1 up to 2-for-2 packages against every
+  team, and only proposes deals where *both* lineups improve. Uneven trades
+  include their knock-on moves — the freed roster spot backfilled from free
+  agency, the extra body dropped — because that is where a 2-for-1's value
+  actually lives. Proposals are ranked by your gain times the odds they say
+  yes (from their gain and the deal's perceived fairness), not by the biggest
+  heist, and each shows both sides' numbers and a plain-language rationale.
+  When a two-step **chain** beats any single deal — trade for a receiver, and
+  the receiver he benches becomes the piece a third team wants — it is laid
+  out step by step, each step still fair to its own counterparty.
 - **Model** — validation metrics, calibration, measured injury and correlation
   rates, and per-position feature importance. Everything above, checkable.
 
@@ -468,6 +481,7 @@ GET  /api/board         full ranked board  ?position=RB&limit=200
 GET  /api/matchup       ?week=4&opponent_mode=auto|declared|optimal&sims=20000
 GET  /api/teams         ?week=4 — every team, its lineup, bench and strengths
 GET  /api/waivers       ?week=4
+GET  /api/trades        ?roster_id=&chains=true&max_package=2
 GET  /api/player/{id}   projection, context, and game log
 GET  /api/model         the model card
 POST /api/retrain       rebuild from scratch

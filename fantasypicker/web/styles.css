@@ -279,3 +279,32 @@ table tbody tr.clickable:hover { background: var(--panel-2); }
 .range-track { position: relative; flex: 1; height: 6px; background: var(--panel-2); border-radius: 99px; min-width: 140px; }
 .range-fill { position: absolute; height: 100%; background: var(--accent); opacity: .45; border-radius: 99px; }
 .range-mark { position: absolute; width: 2px; height: 10px; background: var(--text); top: -2px; }
+
+/* Trades ------------------------------------------------------------------ */
+.trade-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .9rem 1rem; margin-bottom: .8rem; background: var(--panel-2);
+}
+.trade-header { display: flex; justify-content: space-between; align-items: center; gap: .6rem; }
+.badge {
+  font-size: .75rem; padding: .15rem .55rem; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+}
+.trade-likely { color: var(--good); border-color: var(--good); }
+.trade-plausible { color: var(--warn); border-color: var(--warn); }
+.trade-a-stretch { color: var(--muted); }
+.trade-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; margin: .6rem 0 .3rem; }
+@media (max-width: 700px) { .trade-grid { grid-template-columns: 1fr; } }
+.trade-side h4 { margin: 0 0 .35rem; font-size: .8rem; text-transform: uppercase; color: var(--muted); }
+.trade-chips { display: flex; flex-direction: column; gap: .3rem; }
+.trade-player {
+  display: inline-flex; align-items: center; gap: .35rem; cursor: pointer;
+  padding: .2rem .4rem; border-radius: var(--radius);
+}
+.trade-player:hover { background: var(--panel); }
+.trade-gains { margin: .3rem 0 .2rem; font-size: .92rem; }
+.good { color: var(--good); font-weight: 600; }
+.trade-chain { border-top: 1px solid var(--line); padding-top: .6rem; margin-top: .6rem; }
+.trade-chain:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.trade-chain-step { margin-left: .6rem; }
+.chain-step-label { font-size: .75rem; text-transform: uppercase; margin: .4rem 0 .2rem; }

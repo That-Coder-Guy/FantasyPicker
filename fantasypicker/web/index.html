@@ -30,6 +30,7 @@
     <button class="tab" data-view="teams">League</button>
     <button class="tab" data-view="board">Board</button>
     <button class="tab" data-view="waivers">Waivers</button>
+    <button class="tab" data-view="trades">Trades</button>
     <button class="tab" data-view="model">Model</button>
   </nav>
 </header>
@@ -251,6 +252,30 @@
       <h2>Free agents worth adding</h2>
       <div class="table-wrap"><table class="data" id="waivers-table"></table></div>
       <p class="muted small" id="waivers-notes"></p>
+    </div>
+  </section>
+
+  <!-- Trades ----------------------------------------------------------- -->
+  <section id="view-trades" class="view">
+    <div class="toolbar">
+      <button id="trades-refresh" class="ghost">Refresh</button>
+      <span class="muted small">
+        Ranked by what each proposal is worth to you times how likely the other
+        manager is to accept it — every deal shown also improves their lineup.
+      </span>
+    </div>
+    <div class="card" id="trades-chains-card" hidden>
+      <h2>Trade chains</h2>
+      <p class="muted small">
+        Sequences where the first deal sets up the second — the follow-up spends
+        a player the first trade freed or brought in. Make them in order.
+      </p>
+      <div id="trades-chains"></div>
+    </div>
+    <div class="card">
+      <h2>Recommended trades</h2>
+      <div id="trades-list"></div>
+      <p class="muted small" id="trades-notes"></p>
     </div>
   </section>
 

@@ -269,6 +269,21 @@ async def waivers(week: int | None = None, roster_id: int | None = None) -> dict
     return await service.waivers(week, roster_id=roster_id)
 
 
+@app.get("/api/trades")
+async def trades(
+    roster_id: int | None = None,
+    chains: bool = Query(True),
+    max_package: int = Query(2, ge=1, le=2),
+) -> dict[str, Any]:
+    """Mutually beneficial trade proposals, including multi-trade chains."""
+    try:
+        return await service.trades(
+            roster_id=roster_id, chains=chains, max_package=max_package
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/player/{sleeper_id}")
 async def player(sleeper_id: str, week: int | None = None) -> dict[str, Any]:
     return await service.player_detail(sleeper_id, week)

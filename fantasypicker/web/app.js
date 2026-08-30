@@ -76,6 +76,7 @@ const LOADERS = {
   teams: loadTeams,
   board: loadBoard,
   waivers: loadWaivers,
+  trades: loadTrades,
   model: loadModel,
 };
 
@@ -101,7 +102,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
  * Sleeper at most every 30s regardless, so these are about how quickly a change
  * that already reached the server reaches the screen. The draft board is the
  * one place seconds matter; the model card never changes at all. */
-const REFRESH_SECONDS = { draft: 20, matchup: 90, teams: 120, board: 300, waivers: 180, model: 0 };
+const REFRESH_SECONDS = { draft: 20, matchup: 90, teams: 120, board: 300, waivers: 180, trades: 0, model: 0 };
 
 function scheduleAutoRefresh() {
   clearInterval(state.refreshTimer);
@@ -971,6 +972,7 @@ function rangeCell(floor, mid, ceiling, scale) {
 /* ---------------------------------------------------------------- waivers */
 
 $("waivers-refresh").addEventListener("click", () => refreshCurrentView());
+$("trades-refresh").addEventListener("click", () => loadTrades());
 
 async function loadWaivers() {
   const table = $("waivers-table");
@@ -1010,6 +1012,104 @@ async function loadWaivers() {
     $("waivers-notes").textContent = (data.notes || []).join(" ");
   } catch (error) {
     showError(table, error);
+  }
+}
+
+
+/* ----------------------------------------------------------------- trades */
+
+function tradePlayerChip(players, id) {
+  const info = players[id] || { name: id, position: "?", ros_points: 0 };
+  const chip = el("span", "trade-player clickable");
+  chip.append(posSpan(info.position));
+  chip.append(el("span", null, ` ${info.name} `));
+  chip.append(el("small", "muted", `${fmt(info.ros_points, 0)} ros`));
+  chip.addEventListener("click", () => openPlayer(id));
+  return chip;
+}
+
+function tradeSideBlock(players, side, heading) {
+  const block = el("div", "trade-side");
+  block.append(el("h4", null, heading));
+  const list = el("div", "trade-chips");
+  side.gives.forEach((id) => list.append(tradePlayerChip(players, id)));
+  block.append(list);
+  if (side.adds.length) {
+    const extra = el("p", "muted small");
+    extra.textContent =
+      "then adds from waivers: " +
+      side.adds.map((id) => (players[id] || { name: id }).name).join(", ");
+    block.append(extra);
+  }
+  if (side.drops.length) {
+    const extra = el("p", "muted small");
+    extra.textContent =
+      "then drops: " +
+      side.drops.map((id) => (players[id] || { name: id }).name).join(", ");
+    block.append(extra);
+  }
+  return block;
+}
+
+function tradeCard(players, trade) {
+  const card = el("div", "trade-card");
+  const header = el("div", "trade-header");
+  header.append(el("strong", null, `Trade with ${trade.them.label}`));
+  const badge = el("span", `badge trade-${trade.likelihood.replace(/\s+/g, "-")}`);
+  badge.textContent = trade.likelihood;
+  header.append(badge);
+  card.append(header);
+
+  const grid = el("div", "trade-grid");
+  grid.append(tradeSideBlock(players, trade.me, "You send"));
+  grid.append(tradeSideBlock(players, trade.them, "You receive"));
+  card.append(grid);
+
+  const gains = el("p", "trade-gains");
+  gains.append(el("span", "good", `You: +${fmt(trade.me.gain, 1)} ros pts`));
+  gains.append(el("span", "muted", " · "));
+  gains.append(el("span", null, `${trade.them.label}: +${fmt(trade.them.gain, 1)}`));
+  card.append(gains);
+  card.append(el("p", "muted small", trade.rationale));
+  return card;
+}
+
+async function loadTrades() {
+  const list = $("trades-list");
+  const chainsCard = $("trades-chains-card");
+  const chainsBox = $("trades-chains");
+  try {
+    list.innerHTML = "";
+    list.append(el("p", "muted", "Searching every roster for deals that work both ways…"));
+    const data = await api("/api/trades");
+    list.innerHTML = "";
+    chainsBox.innerHTML = "";
+
+    if (!data.trades.length) {
+      list.append(
+        el("p", "muted", "No trade clears the bar right now — nothing you want is available at a price the other side should take.")
+      );
+    }
+    data.trades.forEach((trade) => list.append(tradeCard(data.players, trade)));
+
+    chainsCard.hidden = !data.chains.length;
+    data.chains.forEach((chain, index) => {
+      const wrap = el("div", "trade-chain");
+      wrap.append(
+        el("h3", null, `Chain ${index + 1}: +${fmt(chain.total_gain, 1)} ros pts total`)
+      );
+      chain.steps.forEach((step, si) => {
+        const stepWrap = el("div", "trade-chain-step");
+        stepWrap.append(el("div", "chain-step-label muted", `Step ${si + 1}`));
+        stepWrap.append(tradeCard(data.players, step));
+        wrap.append(stepWrap);
+      });
+      chainsBox.append(wrap);
+    });
+
+    $("trades-notes").textContent = (data.notes || []).join(" ");
+  } catch (error) {
+    showError(list, error);
   }
 }
 

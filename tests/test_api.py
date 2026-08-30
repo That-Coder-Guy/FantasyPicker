@@ -103,7 +103,13 @@ def test_projection_routes_report_loading_rather_than_hanging(client):
     """A UI needs a fast, meaningful answer while the model trains."""
     http, _ = client
     http.post("/api/connect", json={"league_id": "999", "username": "alice"})
-    for path in ("/api/matchup", "/api/draft", "/api/board", "/api/waivers"):
+    for path in (
+        "/api/matchup",
+        "/api/draft",
+        "/api/board",
+        "/api/waivers",
+        "/api/trades",
+    ):
         response = http.get(path)
         assert response.status_code == 425, path
         body = response.json()

@@ -104,6 +104,8 @@ def _dynastyprocess_ids() -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
     df["sleeper_id"] = _as_id(df["sleeper_id"])
     df["fantasypros_id"] = _as_id(df["fantasypros_id"])
+    if "espn_id" in df.columns:
+        df["espn_id"] = _as_id(df["espn_id"])
     df["gsis_id"] = df["gsis_id"].astype(str).replace({"nan": pd.NA, "NA": pd.NA})
     df["name_key"] = df["name"].map(normalize_name)
     df["position"] = df["position"].astype(str).str.upper()
@@ -119,6 +121,8 @@ class Crosswalk:
     gsis_to_sleeper: dict[str, str] = field(default_factory=dict)
     sleeper_to_fp: dict[str, str] = field(default_factory=dict)
     fp_to_sleeper: dict[str, str] = field(default_factory=dict)
+    #: ESPN player_id -> sleeper_id, for reading ESPN-hosted leagues.
+    espn_to_sleeper: dict[str, str] = field(default_factory=dict)
     #: (normalized name, position) -> sleeper_id
     name_to_sleeper: dict[tuple[str, str], str] = field(default_factory=dict)
 
@@ -130,6 +134,30 @@ class Crosswalk:
 
     def by_name(self, name: str, position: str) -> str | None:
         return self.name_to_sleeper.get((normalize_name(name), str(position).upper()))
+
+    def from_espn(
+        self, espn_id: object, name: str = "", position: str = "", team: str | None = None
+    ) -> str | None:
+        """Map an ESPN player onto the Sleeper id everything else is keyed by.
+
+        Team defenses never appear in the ID crosswalk — ESPN gives them
+        synthetic negative player IDs — but Sleeper keys them by team
+        abbreviation, so the pro team is the identifier.
+
+        The name fallback matters most in the days after the NFL draft, when a
+        rookie is rostered on ESPN before the crosswalk has caught up.
+        """
+        if str(position).upper() in {"DST", "DEF", "D/ST"}:
+            return normalize_team(team)
+        key = str(espn_id or "").strip()
+        if key.endswith(".0"):
+            key = key[:-2]
+        mapped = self.espn_to_sleeper.get(key)
+        if mapped:
+            return mapped
+        if name and position:
+            return self.by_name(name, position)
+        return None
 
     def resolve_from_fp(self, fp_id: str | None, name: str, position: str) -> str | None:
         """Map a FantasyPros row to a Sleeper id, DSTs included."""
@@ -165,6 +193,9 @@ def load_crosswalk(sleeper_players: dict[str, dict] | None = None) -> Crosswalk:
         if isinstance(fp, str) and fp not in {"<NA>", "nan"}:
             xw.sleeper_to_fp.setdefault(sid, fp)
             xw.fp_to_sleeper.setdefault(fp, sid)
+        espn = getattr(row, "espn_id", None)
+        if isinstance(espn, str) and espn not in {"<NA>", "nan"}:
+            xw.espn_to_sleeper.setdefault(espn, sid)
         key = (getattr(row, "name_key", ""), getattr(row, "position", ""))
         if key[0]:
             xw.name_to_sleeper.setdefault(key, sid)
@@ -183,8 +214,9 @@ def load_crosswalk(sleeper_players: dict[str, dict] | None = None) -> Crosswalk:
             xw.name_to_sleeper.setdefault((normalize_name(name), position), str(sleeper_id))
 
     log.info(
-        "crosswalk: %d sleeper->gsis, %d sleeper->fantasypros",
+        "crosswalk: %d sleeper->gsis, %d sleeper->fantasypros, %d espn->sleeper",
         len(xw.sleeper_to_gsis),
         len(xw.sleeper_to_fp),
+        len(xw.espn_to_sleeper),
     )
     return xw

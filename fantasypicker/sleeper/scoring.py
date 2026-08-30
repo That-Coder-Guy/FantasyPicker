@@ -61,6 +61,23 @@ def _sum_at_least(names: tuple[str, ...], threshold: float) -> Column:
     return get
 
 
+def _band(name: str, low: float, high: float) -> Column:
+    """Indicator for a closed-open range, e.g. a 300-399 yard passing game.
+
+    Distinct from :func:`_at_least` because platforms differ on this and the
+    difference is real money: a 420-yard game earns an open-ended "300+" bonus
+    but *not* a banded "300-399" one. Treating a band as a threshold silently
+    over-credits every outlier week, which is exactly where projections are
+    most consequential.
+    """
+
+    def get(df: pd.DataFrame) -> pd.Series:
+        values = _col(name)(df)
+        return ((values >= low) & (values < high)).astype(float)
+
+    return get
+
+
 def _diff(a: str, b: str) -> Column:
     def get(df: pd.DataFrame) -> pd.Series:
         return (_col(a)(df) - _col(b)(df)).clip(lower=0)
@@ -97,6 +114,9 @@ OFFENSE_TERMS: dict[str, Column] = {
     "bonus_pass_yd_300": _at_least("passing_yards", 300),
     "bonus_pass_yd_400": _at_least("passing_yards", 400),
     "bonus_pass_cmp_25": _at_least("completions", 25),
+    # Banded variants — ESPN pays these per range, not per threshold.
+    "bonus_pass_yd_300_399": _band("passing_yards", 300, 400),
+    "pass_yac": _col("passing_yards_after_catch"),
     # rushing
     "rush_att": _col("carries"),
     "rush_yd": _col("rushing_yards"),
@@ -107,6 +127,7 @@ OFFENSE_TERMS: dict[str, Column] = {
     "bonus_rush_yd_100": _at_least("rushing_yards", 100),
     "bonus_rush_yd_200": _at_least("rushing_yards", 200),
     "bonus_rush_att_20": _at_least("carries", 20),
+    "bonus_rush_yd_100_199": _band("rushing_yards", 100, 200),
     # receiving
     "rec": _col("receptions"),
     "rec_yd": _col("receiving_yards"),
@@ -117,6 +138,8 @@ OFFENSE_TERMS: dict[str, Column] = {
     "rec_40p": _col("receiving_40"),
     "bonus_rec_yd_100": _at_least("receiving_yards", 100),
     "bonus_rec_yd_200": _at_least("receiving_yards", 200),
+    "bonus_rec_yd_100_199": _band("receiving_yards", 100, 200),
+    "rec_yac": _col("receiving_yards_after_catch"),
     # per-position reception values (TE premium and friends)
     "bonus_rec_rb": _pos_only("receptions", ("RB",)),
     "bonus_rec_wr": _pos_only("receptions", ("WR",)),
@@ -130,6 +153,13 @@ OFFENSE_TERMS: dict[str, Column] = {
     # turnovers / misc
     "fum": _col("fumbles_total"),
     "fum_lost": _col("fumbles_lost_total"),
+    # ESPN offers combined counters that Sleeper only exposes split up.
+    "two_pt": _sum(
+        "passing_2pt_conversions",
+        "rushing_2pt_conversions",
+        "receiving_2pt_conversions",
+    ),
+    "turnovers": _sum("passing_interceptions", "fumbles_lost_total"),
     "fum_rec_td": _col("fumble_recovery_tds"),
     "st_td": _col("special_teams_tds"),
     "st_ff": _col("def_fumbles_forced"),
@@ -149,8 +179,28 @@ OFFENSE_TERMS: dict[str, Column] = {
     "fgmiss_30_39": _col("fg_missed_30_39"),
     "fgmiss_40_49": _col("fg_missed_40_49"),
     "fgmiss_50p": _sum("fg_missed_50_59", "fg_missed_60_"),
+    "fgmiss_50_59": _col("fg_missed_50_59"),
+    "fgmiss_60p": _col("fg_missed_60_"),
     "xpm": _col("pat_made"),
     "xpmiss": _col("pat_missed"),
+    # ESPN buckets kicks as 0-39 and scores attempts and total made yardage,
+    # all of which the weekly kicking splits support directly.
+    "fgm_0_39": _sum("fg_made_0_19", "fg_made_20_29", "fg_made_30_39"),
+    "fgmiss_0_39": _sum("fg_missed_0_19", "fg_missed_20_29", "fg_missed_30_39"),
+    "fga": _col("fg_att"),
+    "fga_0_39": _sum(
+        "fg_made_0_19", "fg_made_20_29", "fg_made_30_39",
+        "fg_missed_0_19", "fg_missed_20_29", "fg_missed_30_39",
+    ),
+    "fga_40_49": _sum("fg_made_40_49", "fg_missed_40_49"),
+    "fga_50p": _sum(
+        "fg_made_50_59", "fg_made_60_", "fg_missed_50_59", "fg_missed_60_"
+    ),
+    "fga_50_59": _sum("fg_made_50_59", "fg_missed_50_59"),
+    "fga_60p": _sum("fg_made_60_", "fg_missed_60_"),
+    "xpa": _col("pat_att"),
+    "fgm_yds": _col("fg_made_distance"),
+    "fgmiss_yds": _col("fg_missed_distance"),
     # individual defensive players (IDP leagues)
     "idp_tkl": _col("def_tackles_solo"),
     "idp_tkl_solo": _col("def_tackles_solo"),
@@ -182,10 +232,14 @@ DST_TERMS: dict[str, Column] = {
     "blk_kick": _col("dst_blocked_kicks"),
     "def_2pt": _col("dst_def_2pt"),
     "pts_allow": _col("dst_points_allowed"),
+    "yds_allow": _col("dst_yards_allowed"),
     "tkl_loss": _col("dst_tackles_for_loss"),
 }
 
 #: Points-allowed and yards-allowed buckets: key -> (low, high) inclusive range.
+#: Sleeper splits 14-20/21-27/28-34/35+; ESPN splits 14-17/18-21/22-27/35-45/46+.
+#: The shared edges (0, 1-6, 7-13, 28-34) are listed once and the rest coexist,
+#: since a league only ever sets the bands its own platform offers.
 PTS_ALLOW_BUCKETS: dict[str, tuple[float, float]] = {
     "pts_allow_0": (0, 0),
     "pts_allow_1_6": (1, 6),
@@ -194,6 +248,12 @@ PTS_ALLOW_BUCKETS: dict[str, tuple[float, float]] = {
     "pts_allow_21_27": (21, 27),
     "pts_allow_28_34": (28, 34),
     "pts_allow_35p": (35, np.inf),
+    # ESPN's bands
+    "pts_allow_14_17": (14, 17),
+    "pts_allow_18_21": (18, 21),
+    "pts_allow_22_27": (22, 27),
+    "pts_allow_35_45": (35, 45),
+    "pts_allow_46p": (46, np.inf),
 }
 
 YDS_ALLOW_BUCKETS: dict[str, tuple[float, float]] = {
@@ -219,7 +279,6 @@ KNOWN_UNSUPPORTED = {
     "rec_td_50p",
     "pass_int_td",
     "blk_kick_ret_yd",
-    "fgm_yds",
     "fgm_yds_over_30",
     "pr_yd",
     "kr_yd",

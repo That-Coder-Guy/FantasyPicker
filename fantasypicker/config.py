@@ -18,6 +18,10 @@ NFLDATA_RAW = "https://raw.githubusercontent.com/nflverse/nfldata/master/data"
 DYNASTYPROCESS_RAW = "https://raw.githubusercontent.com/dynastyprocess/data/master/files"
 SLEEPER_API = "https://api.sleeper.app/v1"
 SLEEPER_CDN = "https://sleepercdn.com"
+#: ESPN's read replica for fantasy league data. The `lm-api-reads` host is the
+#: one espn.com's own front end uses for reads and is noticeably more tolerant
+#: than the write host.
+ESPN_API = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,22 @@ class FetchError(RuntimeError):
     """Raised when a resource could not be fetched and no cached copy exists."""
 
 
+class AuthError(FetchError):
+    """The server refused the request for want of valid credentials.
+
+    Distinguished from a transport failure because the two want opposite
+    handling: a timeout is worth retrying and worth falling back to a stale
+    copy, whereas a rejected credential will be rejected identically four more
+    times, and quietly serving yesterday's data hides the one thing the user
+    needs to be told — that their session cookies have expired.
+    """
+
+    def __init__(self, status_code: int, url: str) -> None:
+        self.status_code = status_code
+        self.url = url
+        super().__init__(f"{status_code} (not authorised) from {url}")
+
+
 def _paths(url: str, ext: str) -> tuple[Path, Path]:
     settings = get_settings()
     settings.ensure_dirs()
@@ -106,6 +122,8 @@ async def fetch_json(
     )
     try:
         payload = await _get_json_with_retry(client, url, allow_404=allow_404)
+    except AuthError:
+        raise  # never mask an expired credential behind stale data
     except FetchError:
         if data_path.exists():
             log.warning("using stale cache for %s", url)
@@ -133,6 +151,8 @@ async def _get_json_with_retry(
             resp = await client.get(url, follow_redirects=True)
             if resp.status_code == 404 and allow_404:
                 return None
+            if resp.status_code in (401, 403):
+                raise AuthError(resp.status_code, url)
             if resp.status_code == 429 or resp.status_code >= 500:
                 raise httpx.HTTPStatusError(
                     f"{resp.status_code} from {url}", request=resp.request, response=resp

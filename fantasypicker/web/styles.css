@@ -322,8 +322,8 @@ table th.num-col { font-family: inherit; }
 .team-avatar.fallback {
   font-size: .62rem; font-weight: 700; color: var(--muted); letter-spacing: .02em;
 }
-.team-avatar.lg { width: 30px; height: 30px; }
-.team-avatar.lg.fallback { font-size: .72rem; }
+.team-avatar.lg { width: 46px; height: 46px; }
+.team-avatar.lg.fallback { font-size: .95rem; }
 .team-name .team-avatar { margin-right: .45rem; }
 .team-btn.with-avatar { display: flex; align-items: center; gap: .6rem; }
 .team-btn.with-avatar .team-btn-text { min-width: 0; }

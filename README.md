@@ -301,7 +301,9 @@ Five tabs:
   automatically; you choose whether to model them as they have their lineup set
   or at their best.
 - **League** — every team in the league, ranked by the best lineup its roster
-  could field, with that lineup laid out. Toggle to what each manager actually
+  could field, with that lineup laid out. Before the draft it still lists every
+  team, ordered by draft slot, since that is the only thing distinguishing them
+  when every roster is empty. Toggle to what each manager actually
   has set, and the difference is shown: who is leaving points on their bench,
   and how many. Per-position strength chips compare each roster to the league
   average, so it is obvious at a glance who is deep at running back and who is
@@ -439,7 +441,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 159 tests, no network access required
+pytest                          # 168 tests, no network access required
 fantasypicker serve --reload
 ```
 

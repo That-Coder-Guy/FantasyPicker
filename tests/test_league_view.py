@@ -129,7 +129,8 @@ def test_a_team_with_no_lineup_set_is_reported_not_scored_as_zero():
     assert view.points_left_on_bench == 0
 
 
-def test_a_roster_too_thin_to_fill_the_lineup_says_so():
+def test_a_part_filled_roster_reads_as_mid_draft_not_broken():
+    """Two players in a nine-slot league is a draft in progress."""
     thin = [
         {"id": "t-QB0", "position": "QB", "name": "Only QB", "mean": 18.0},
         {"id": "t-RB0", "position": "RB", "name": "Only RB", "mean": 12.0},
@@ -137,6 +138,20 @@ def test_a_roster_too_thin_to_fill_the_lineup_says_so():
     league, projections, _ = build({1: thin})
     view = build_league_view(league, projections)[0]
     assert len(view.starters) == 2
+    assert view.roster_size == 2
+    assert any("mid-draft" in note for note in view.notes)
+
+
+def test_a_full_roster_that_still_cannot_field_a_lineup_says_so():
+    """Enough bodies, wrong positions — that really is a broken roster."""
+    all_backs = [
+        {"id": f"b-RB{i}", "position": "RB", "name": f"Back {i}", "mean": 10.0}
+        for i in range(11)
+    ]
+    league, projections, _ = build({1: all_backs})
+    view = build_league_view(league, projections)[0]
+    assert view.roster_size == 11
+    # RB, RB and FLEX can be filled; QB, WR, WR, TE, K and DEF cannot.
     assert any("cannot be filled" in note for note in view.notes)
 
 
@@ -247,3 +262,71 @@ def test_a_partially_unprojectable_lineup_is_flagged_as_a_floor():
     assert any("no projection" in note for note in view.notes)
     # The gap is partly our ignorance, so no accusation of benching points.
     assert not any("on the bench" in note for note in view.notes)
+
+
+# ------------------------------------------------------------------ pre-draft
+
+
+def test_teams_are_present_before_the_draft():
+    """The reported bug: an undrafted league showed no teams at all."""
+    league, projections, _ = build({1: [], 2: [], 3: []})
+    views = build_league_view(league, projections)
+    assert len(views) == 3
+    assert [v.label for v in views] == ["Team 1", "Team 2", "Team 3"]
+    for view in views:
+        assert view.roster_size == 0
+        assert view.projected_points == 0.0
+        assert view.starters == []
+        assert any("has not drafted" in note for note in view.notes)
+        # The nine "slot cannot be filled" warnings would bury the real reason.
+        assert not any("cannot be filled" in note for note in view.notes)
+
+
+def test_pre_draft_teams_keep_their_identity():
+    """Names, owners and records must survive an empty roster."""
+    league, projections, _ = build({1: [], 2: []})
+    league.teams[1].team_name = "Sunday Sickos"
+    league.teams[1].wins = 0
+    views = build_league_view(league, projections)
+    mine = next(v for v in views if v.roster_id == 1)
+    assert mine.label == "Sunday Sickos"
+    assert mine.owner == "owner1"
+    assert mine.record == "0-0"
+    assert mine.is_me is True
+
+
+def test_pre_draft_teams_are_ordered_by_draft_slot():
+    """With every projection zero, draft position is the only real ordering."""
+    league, projections, _ = build({1: [], 2: [], 3: []})
+    order = {"u1": 3, "u2": 1, "u3": 2}
+    views = build_league_view(league, projections, draft_order=order)
+    assert [v.roster_id for v in views] == [2, 3, 1]
+    assert [v.draft_slot for v in views] == [1, 2, 3]
+
+
+def test_a_league_with_no_draft_order_still_lists_every_team():
+    league, projections, _ = build({1: [], 2: []})
+    views = build_league_view(league, projections, draft_order={})
+    assert len(views) == 2
+    assert all(v.draft_slot is None for v in views)
+
+
+def test_an_empty_projection_set_does_not_break_the_page():
+    """project_week legitimately returns nothing for a week off the schedule."""
+    import pandas as pd
+
+    from fantasypicker.model.predict import ProjectionSet
+
+    league, _, _ = build({1: roster("a", 15), 2: roster("b", 12)})
+    empty = ProjectionSet(pd.DataFrame(), QUANTILES, season=2026, week=1)
+    views = build_league_view(league, empty)
+    assert len(views) == 2
+    assert all(v.projected_points == 0.0 for v in views)
+
+
+def test_a_partly_drafted_league_still_ranks_by_points():
+    """Once anyone has players, ordering goes back to strength."""
+    league, projections, _ = build({1: [], 2: roster("b", 15)})
+    views = build_league_view(league, projections)
+    assert views[0].roster_id == 2
+    assert views[0].projected_points > 0

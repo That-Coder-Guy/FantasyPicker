@@ -736,10 +736,13 @@ class PickerService:
         await self.refresh_live()
         assert self.league is not None
         league = self.league
-        week = int(week or league.current_week)
+        # Sleeper reports week 0 in the offseason, and the schedule has no such
+        # week — asking for it yields an empty projection set and an empty page.
+        week = max(1, int(week or league.current_week or 1))
 
         async with SleeperClient() as client:
             matchup_rows = await league.load_matchups(client, week)
+            draft_order = await self._draft_order(client)
 
         projections = await self.projections_for_week(week)
         views = await asyncio.to_thread(
@@ -748,6 +751,7 @@ class PickerService:
                 projections,
                 season_projections=self.season_projections,
                 matchup_rows=matchup_rows,
+                draft_order=draft_order,
             )
         )
         return {
@@ -759,6 +763,32 @@ class PickerService:
                 k: round(v, 1) for k, v in league_view.league_averages(views).items()
             },
         }
+
+    async def _draft_order(self, client: SleeperClient) -> dict[str, int]:
+        """user_id -> draft slot, so the League page means something pre-draft.
+
+        Before anyone has drafted every roster is empty and every projection is
+        zero; draft position is the only thing that actually distinguishes the
+        teams, so it is worth the one extra (cached) call.
+        """
+        assert self.league is not None
+        try:
+            drafts = await client.league_drafts(self.league.league_id)
+        except FetchError:
+            return {}
+        if not drafts:
+            return {}
+        draft = next((d for d in drafts if d.get("status") != "complete"), drafts[0])
+        order = draft.get("draft_order") or {}
+        if not isinstance(order, dict):
+            return {}
+        out: dict[str, int] = {}
+        for user_id, slot in order.items():
+            try:
+                out[str(user_id)] = int(slot)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     async def player_detail(self, sleeper_id: str, week: int | None = None) -> dict[str, Any]:
         self._require_ready()

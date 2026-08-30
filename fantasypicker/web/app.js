@@ -677,16 +677,27 @@ function renderTeams() {
 
   const declared = $("teams-mode").value === "declared";
   const showBench = $("teams-bench").checked;
-  const teams = data.teams.slice().sort((a, b) =>
-    declared ? b.declared_points - a.declared_points : b.projected_points - a.projected_points
-  );
+  // Before the draft every roster is empty and every projection is zero, so the
+  // server orders by draft slot instead; re-sorting by points here would undo it.
+  const undrafted = !data.teams.some((team) => team.roster_size > 0);
+  const teams = undrafted
+    ? data.teams.slice()
+    : data.teams
+        .slice()
+        .sort((a, b) =>
+          declared ? b.declared_points - a.declared_points : b.projected_points - a.projected_points
+        );
 
-  summary.append(el("h2", null, `Week ${data.week} — every team`));
+  summary.append(el("h2", null, undrafted ? "Every team" : `Week ${data.week} — every team`));
   summary.append(
     el(
       "p",
       "muted small",
-      declared
+      undrafted
+        ? "This league has not drafted yet, so there are no lineups to compare. " +
+          "Teams are listed in draft order where Sleeper has set one. Head to the " +
+          "Draft tab for the board."
+        : declared
         ? "Ranked by the lineup each manager currently has set. Teams that have not set one show their best possible instead."
         : `Ranked by the best lineup each roster could field — the honest measure of team strength, ` +
           `independent of whether the manager has logged in. League average ${fmt(data.averages.projected_points)}.`
@@ -714,12 +725,22 @@ function renderTeams() {
     head.append(left);
 
     const score = el("div", "team-score");
-    score.append(el("b", null, fmt(points)));
-    score.append(el("span", null, "projected"));
+    if (undrafted) {
+      score.append(el("b", null, team.draft_slot ? `#${team.draft_slot}` : "–"));
+      score.append(el("span", null, team.draft_slot ? "draft slot" : "no slot yet"));
+    } else {
+      score.append(el("b", null, fmt(points)));
+      score.append(el("span", null, "projected"));
+    }
     head.append(score);
     card.append(head);
 
     const rows = declared && team.declared.length ? team.declared : team.starters;
+    if (!rows.length) {
+      (team.notes || []).forEach((note) => card.append(el("p", "muted small", note)));
+      grid.append(card);
+      return;
+    }
     const table = el("table", "lineup compact");
     const body = el("tbody");
     rows.forEach((player) => {

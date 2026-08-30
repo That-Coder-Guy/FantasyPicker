@@ -54,6 +54,8 @@ class TeamView:
     opponent_roster_id: int | None = None
     opponent_label: str | None = None
     byes: dict[str, int] = field(default_factory=dict)
+    roster_size: int = 0
+    draft_slot: int | None = None
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
@@ -75,6 +77,8 @@ class TeamView:
             "opponent_roster_id": self.opponent_roster_id,
             "opponent_label": self.opponent_label,
             "byes": self.byes,
+            "roster_size": self.roster_size,
+            "draft_slot": self.draft_slot,
             "notes": self.notes,
         }
 
@@ -136,6 +140,7 @@ def build_league_view(
     *,
     season_projections: ProjectionSet | None = None,
     matchup_rows: list[dict] | None = None,
+    draft_order: dict[str, int] | None = None,
 ) -> list[TeamView]:
     """One :class:`TeamView` per team, ranked by best-possible projected points."""
     slots = league.slots
@@ -178,6 +183,7 @@ def build_league_view(
             declared=declared_by_roster.get(roster_id, list(team.starters)),
             opponent_id=opponent_of.get(roster_id),
             ros_lookup=ros_lookup,
+            draft_slot=(draft_order or {}).get(str(team.owner_id or "")),
         )
         views.append(view)
 
@@ -186,7 +192,12 @@ def build_league_view(
         if view.opponent_roster_id is not None:
             view.opponent_label = labels.get(view.opponent_roster_id)
 
-    views.sort(key=lambda v: -v.projected_points)
+    if any(v.roster_size for v in views):
+        views.sort(key=lambda v: -v.projected_points)
+    else:
+        # Nobody has drafted: order by draft slot when known, else by team name,
+        # because sorting a dozen identical zeros is just shuffling.
+        views.sort(key=lambda v: (v.draft_slot or 99, v.label.lower()))
     return views
 
 
@@ -199,6 +210,7 @@ def _build_team_view(
     declared: list[str],
     opponent_id: int | None,
     ros_lookup: dict[str, float],
+    draft_slot: int | None = None,
 ) -> TeamView:
     best, rows = _solve(slots, projections, team.active_players)
     best_ids = best.starters
@@ -221,6 +233,26 @@ def _build_team_view(
     unresolved = len(declared_ids) - len(declared_rows)
 
     notes: list[str] = []
+    roster_size = len(team.active_players)
+    if roster_size == 0:
+        # Before the draft every roster is empty. That is not a broken team, and
+        # nine "slot cannot be filled" warnings would bury the fact.
+        return TeamView(
+            roster_id=team.roster_id,
+            label=team.label,
+            owner=team.display_name,
+            record=team.record,
+            points_for=team.points_for,
+            is_me=team.roster_id == league.my_roster_id,
+            projected_points=0.0,
+            declared_points=0.0,
+            points_left_on_bench=0.0,
+            opponent_roster_id=opponent_id,
+            roster_size=0,
+            draft_slot=draft_slot,
+            notes=["No players yet — this league has not drafted."],
+        )
+
     trust_declared = True
     if not declared_ids:
         notes.append("No lineup set yet.")
@@ -238,7 +270,12 @@ def _build_team_view(
         declared_points = projected
 
     unfilled = len(slots) - len(best.assignment)
-    if unfilled > 0:
+    if unfilled > 0 and roster_size < len(slots):
+        notes.append(
+            f"Only {roster_size} player{'s' if roster_size != 1 else ''} rostered — "
+            "mid-draft, or a roster still being filled."
+        )
+    elif unfilled > 0:
         notes.append(
             f"{unfilled} starting slot{'s' if unfilled > 1 else ''} cannot be filled "
             "from this roster."
@@ -286,6 +323,8 @@ def _build_team_view(
         ros_points=float(ros),
         opponent_roster_id=opponent_id,
         byes=_bye_counts(rows, projections),
+        roster_size=roster_size,
+        draft_slot=draft_slot,
         notes=notes,
     )
 

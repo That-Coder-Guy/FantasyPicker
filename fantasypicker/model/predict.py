@@ -51,12 +51,26 @@ class ProjectionSet:
     def __len__(self) -> int:
         return len(self.frame)
 
+    @property
+    def is_empty(self) -> bool:
+        """True when there is nothing to look up.
+
+        A projection set is legitimately empty — a week the schedule does not
+        cover, or the preseason before any games exist — and every accessor has
+        to survive that rather than raising on a missing column.
+        """
+        return self.frame.empty or "sleeper_id" not in self.frame.columns
+
     def by_id(self, sleeper_id: str) -> pd.Series | None:
+        if self.is_empty:
+            return None
         rows = self.frame[self.frame["sleeper_id"] == str(sleeper_id)]
         return None if rows.empty else rows.iloc[0]
 
     def subset(self, sleeper_ids: list[str]) -> pd.DataFrame:
         """Rows for the given players, preserving the order asked for."""
+        if self.is_empty:
+            return self.frame
         wanted = [str(p) for p in sleeper_ids]
         indexed = self.frame.set_index("sleeper_id")
         present = [p for p in wanted if p in indexed.index]

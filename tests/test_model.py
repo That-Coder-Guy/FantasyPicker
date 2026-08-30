@@ -302,3 +302,41 @@ def test_fit_availability_measures_rates_from_appearances():
     # No injury file in the test cache, so the fallbacks stand — and must be sane.
     assert model.probability("OUT") == 0.0
     assert model.probability("") > 0.9
+
+
+# ----------------------------------------------------- empty projection sets
+
+
+def test_an_empty_projection_set_answers_lookups_instead_of_raising():
+    """Preseason, and any week off the schedule, produce an empty set.
+
+    Every accessor has to survive that: the frame has no columns at all, so
+    naive indexing raises KeyError and takes a whole page down with it.
+    """
+    from fantasypicker.model.predict import ProjectionSet
+
+    empty = ProjectionSet(pd.DataFrame(), QUANTILES, season=2026, week=1)
+    assert empty.is_empty is True
+    assert len(empty) == 0
+    assert empty.by_id("anyone") is None
+    assert empty.subset(["anyone"]).empty
+    quantiles, p_play, ids = empty.matrix(["anyone"])
+    assert quantiles.shape == (0, len(QUANTILES))
+    assert p_play.shape == (0,)
+    assert ids == []
+
+
+def test_a_populated_projection_set_is_not_reported_empty():
+    from fantasypicker.model.predict import ProjectionSet
+
+    from .conftest import make_projection_frame
+
+    populated = ProjectionSet(
+        make_projection_frame([{"id": "a", "position": "RB", "mean": 10.0}]),
+        QUANTILES,
+        season=2026,
+        week=1,
+    )
+    assert populated.is_empty is False
+    assert populated.by_id("a") is not None
+    assert populated.by_id("missing") is None

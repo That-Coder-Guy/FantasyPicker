@@ -92,6 +92,7 @@ class Team:
     starters: list[str] = field(default_factory=list)
     reserve: list[str] = field(default_factory=list)
     taxi: list[str] = field(default_factory=list)
+    username: str = ""
     wins: int = 0
     losses: int = 0
     ties: int = 0
@@ -100,7 +101,28 @@ class Team:
 
     @property
     def label(self) -> str:
-        return self.team_name or self.display_name or f"Team {self.roster_id}"
+        """What to call this team.
+
+        Sleeper carries three candidate names and any of them can be blank: the
+        custom team name (most managers never set one), the display name, and
+        the login username. Falling back through all three means the numeric
+        placeholder is reached only when Sleeper genuinely told us nothing.
+        """
+        return (
+            self.team_name
+            or self.display_name
+            or self.username
+            or f"Team {self.roster_id}"
+        )
+
+    @property
+    def manager(self) -> str:
+        """The person, as distinct from the team.
+
+        Shown next to :attr:`label` so a custom team name still tells you who
+        you are trading with.
+        """
+        return self.display_name or self.username or "unclaimed"
 
     @property
     def record(self) -> str:
@@ -299,6 +321,7 @@ def build_teams(
     users_by_id = {u.get("user_id"): u for u in users if u.get("user_id")}
     known = previous or {}
     teams: dict[int, Team] = {}
+    nameless: list[int] = []
     for row in rosters:
         roster_id = int(row.get("roster_id"))
         owner_id = row.get("owner_id")
@@ -318,7 +341,11 @@ def build_teams(
             display_name=(
                 user.get("display_name")
                 or (prior.display_name if prior else "")
-                or f"Team {roster_id}"
+                or user.get("username")
+                or ""
+            ),
+            username=(
+                user.get("username") or (prior.username if prior else "") or ""
             ),
             team_name=(
                 metadata.get("team_name") or (prior.team_name if prior else "")
@@ -333,6 +360,20 @@ def build_teams(
             points_for=float(settings.get("fpts") or 0)
             + float(settings.get("fpts_decimal") or 0) / 100.0,
             avatar=user.get("avatar") or (prior.avatar if prior else None),
+        )
+        if not user:
+            nameless.append(roster_id)
+    if nameless and users:
+        # Sleeper answered with users, but none of them own these rosters. That
+        # is not a network problem, so the carry-forward above cannot help on a
+        # cold start — say so loudly rather than quietly showing "Team 4".
+        log.warning(
+            "%d of %d rosters have no matching Sleeper user (roster_ids %s); "
+            "those teams fall back to a numeric name. Run "
+            "`fantasypicker doctor <league_id>` to see what Sleeper returned.",
+            len(nameless),
+            len(rosters),
+            ", ".join(str(r) for r in nameless),
         )
     return teams
 

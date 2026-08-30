@@ -64,6 +64,22 @@ fantasypicker leagues yourname     # prints every league and its ID
 If that command finds your user but lists no leagues, your league is not on
 Sleeper — see [Limits worth knowing](#limits-worth-knowing).
 
+### When teams show up as "Team 4"
+
+Team names live on Sleeper's *user* objects, joined to rosters by `owner_id`,
+and the app falls back through every name Sleeper offers — the custom team name,
+the display name, then the login username — before resorting to a number. A
+numeric name therefore means the join itself missed. To see which:
+
+```bash
+fantasypicker doctor <league_id>
+```
+
+It prints every user with all three name fields, every roster with its
+`owner_id`, and the label each roster ends up with, bypassing the response
+cache. A roster whose `owner_id` matches no user is an orphaned team — someone
+left the league — and Sleeper genuinely has no name for it.
+
 ### Windows notes
 
 Use `.venv\Scripts\activate.bat` instead if you are in `cmd.exe`. If PowerShell

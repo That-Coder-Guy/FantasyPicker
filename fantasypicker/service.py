@@ -322,7 +322,7 @@ class PickerService:
                 {
                     "roster_id": t.roster_id,
                     "label": t.label,
-                    "owner": t.display_name,
+                    "owner": t.manager,
                     "record": t.record,
                     "points_for": round(t.points_for, 2),
                     "is_me": t.roster_id == league.my_roster_id,

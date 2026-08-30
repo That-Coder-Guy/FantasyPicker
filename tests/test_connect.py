@@ -245,6 +245,62 @@ def test_users_without_an_id_are_ignored_rather_than_matching_a_null_owner():
     assert teams[1].label == "Team 1"
 
 
+def test_a_user_with_only_a_username_is_named_after_it():
+    """Sleeper leaves display_name blank on some accounts.
+
+    Both other name fields being empty used to drop straight through to
+    "Team N", even though the username was sitting right there on the same
+    object.
+    """
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "username": "carol", "display_name": "", "metadata": {}}],
+    )
+    assert teams[1].label == "carol"
+    assert teams[1].manager == "carol"
+
+
+def test_a_custom_team_name_wins_over_both_personal_names():
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [
+            {
+                "user_id": "u1",
+                "username": "carol",
+                "display_name": "Carol P",
+                "metadata": {"team_name": "Hail Mary"},
+            }
+        ],
+    )
+    assert teams[1].label == "Hail Mary"
+    # The team is the team; the manager is still named separately.
+    assert teams[1].manager == "Carol P"
+
+
+def test_the_username_carries_forward_through_a_partial_response():
+    users = [{"user_id": "u1", "username": "carol", "metadata": {}}]
+    rosters = [{"roster_id": 1, "owner_id": "u1"}]
+    first = build_teams(rosters, users)
+    second = build_teams(rosters, [], previous=first)
+    assert second[1].label == "carol"
+
+
+def test_an_unmatched_owner_is_logged_rather_than_silently_renumbered(caplog):
+    """Users came back fine, they just do not own this roster.
+
+    Carry-forward cannot rescue that on a cold start, so the only signal the
+    user gets is the log line pointing at `doctor`.
+    """
+    with caplog.at_level("WARNING"):
+        teams = build_teams(
+            [{"roster_id": 7, "owner_id": "ghost"}],
+            [{"user_id": "u1", "display_name": "alice"}],
+        )
+    assert teams[7].label == "Team 7"
+    assert "no matching Sleeper user" in caplog.text
+    assert "doctor" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_refresh_keeps_names_when_sleeper_returns_no_users():
     """End to end: a partial refresh must not blank the league."""

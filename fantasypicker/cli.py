@@ -41,6 +41,14 @@ def main(argv: list[str] | None = None) -> int:
     leagues.add_argument("--season", type=int, default=None)
     leagues.add_argument("-v", "--verbose", action="store_true")
 
+    doctor = sub.add_parser(
+        "doctor",
+        help="Print exactly what Sleeper returns for a league — use this when "
+        "team names or rosters look wrong.",
+    )
+    doctor.add_argument("league_id")
+    doctor.add_argument("-v", "--verbose", action="store_true")
+
     sub.add_parser("where", help="Print the cache and model directories.")
 
     args = parser.parse_args(argv)
@@ -65,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "leagues":
         return _leagues(args.username, args.season)
+
+    if command == "doctor":
+        return _doctor(args.league_id)
 
     return _serve(args)
 
@@ -97,6 +108,74 @@ def _leagues(username: str, season: int | None) -> int:
         for league in rows:
             print(f"  {league['league_id']}  {league['name']}")
             print(f"      {league['teams']} teams · {league['scoring']} · {league['status']}")
+        return 0
+
+    return asyncio.run(run())
+
+
+def _doctor(league_id: str) -> int:
+    """Dump the raw shape of a league's Sleeper responses.
+
+    Team names come from the *user* objects, joined to rosters on ``owner_id``.
+    When that join misses — an orphaned team, a co-owner-only roster, a user
+    with every name field blank — the app can only fall back to "Team 4", and
+    from the outside every one of those causes looks identical. This prints the
+    join so the cause is obvious in a single run.
+    """
+    import asyncio
+
+    from .sleeper.client import SleeperClient
+    from .sleeper.league import build_teams
+
+    async def run() -> int:
+        async with SleeperClient() as client:
+            league, users, rosters = await asyncio.gather(
+                client.league(league_id),
+                client.league_users(league_id, fresh=True),
+                client.rosters(league_id, fresh=True),
+            )
+        if not league:
+            print(
+                f"Sleeper has no league with ID {league_id}.\n"
+                "Check the ID in your league's URL "
+                "(sleeper.com/leagues/<this part>/team), and note that an ID "
+                "from a previous season is a different league.",
+                file=sys.stderr,
+            )
+            return 1
+
+        print(f"{league.get('name')}  ({league_id})")
+        print(
+            f"  season {league.get('season')} · status {league.get('status')} "
+            f"· {league.get('total_rosters')} rosters"
+        )
+        print(f"\nusers: {len(users)}")
+        for user in users:
+            metadata = user.get("metadata") or {}
+            print(
+                f"  {str(user.get('user_id') or 'no user_id'):<24} "
+                f"username={str(user.get('username') or '-'):<20} "
+                f"display_name={str(user.get('display_name') or '-'):<20} "
+                f"team_name={metadata.get('team_name') or '-'}"
+            )
+
+        known = {u.get("user_id") for u in users}
+        matched = sum(1 for r in rosters if r.get("owner_id") in known)
+        print(f"\nrosters: {len(rosters)} · owner_id matches a user: {matched}")
+        teams = build_teams(rosters, users)
+        for roster_id in sorted(teams):
+            team = teams[roster_id]
+            flag = "" if team.owner_id in known else "  <-- no matching user"
+            print(
+                f"  roster {roster_id:<3} owner={team.owner_id or 'none':<24} "
+                f"label={team.label!r}{flag}"
+            )
+        if matched < len(rosters):
+            print(
+                "\nRosters whose owner_id matches no user are orphaned teams. "
+                "Sleeper gives them no name, so they show as 'Team N'.",
+                file=sys.stderr,
+            )
         return 0
 
     return asyncio.run(run())

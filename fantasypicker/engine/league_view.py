@@ -240,7 +240,7 @@ def _build_team_view(
         return TeamView(
             roster_id=team.roster_id,
             label=team.label,
-            owner=team.display_name,
+            owner=team.manager,
             record=team.record,
             points_for=team.points_for,
             is_me=team.roster_id == league.my_roster_id,
@@ -306,7 +306,7 @@ def _build_team_view(
     return TeamView(
         roster_id=team.roster_id,
         label=team.label,
-        owner=team.display_name,
+        owner=team.manager,
         record=team.record,
         points_for=team.points_for,
         is_me=team.roster_id == league.my_roster_id,

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .cache import FetchError
+from .espn.client import EspnAuthRequired
 from .service import NotReady, service
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,20 @@ app = FastAPI(title="FantasyPicker", version=__version__, lifespan=lifespan)
 class ConnectRequest(BaseModel):
     league_id: str = Field(..., description="Sleeper league ID, or a pasted league URL")
     username: str | None = Field(None, description="Your Sleeper username, to find your team")
+
+
+class EspnConnectRequest(BaseModel):
+    """Connect to an ESPN league.
+
+    ``espn_s2`` and ``swid`` are only needed for a private league. They are
+    stored locally for next time and sent to nobody but ESPN; they are never
+    echoed back in a response.
+    """
+
+    league_id: str = Field(..., description="ESPN league ID, or a pasted league URL")
+    season: int | None = Field(None, description="Defaults to the current season")
+    espn_s2: str | None = Field(None, description="espn_s2 cookie, private leagues only")
+    swid: str | None = Field(None, description="SWID cookie, private leagues only")
 
 
 class LeagueLookupRequest(BaseModel):
@@ -99,6 +114,25 @@ async def connect(request: ConnectRequest) -> dict[str, Any]:
     """Attach to a Sleeper league and start loading projections behind it."""
     try:
         summary = await service.connect(request.league_id.strip(), request.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    service.start_warmup()
+    return {"league": summary, "status": service.status.as_dict()}
+
+
+@app.post("/api/connect/espn")
+async def connect_espn(request: EspnConnectRequest) -> dict[str, Any]:
+    """Attach to an ESPN league and start loading projections behind it."""
+    try:
+        summary = await service.connect_espn(
+            request.league_id.strip(),
+            season=request.season,
+            espn_s2=request.espn_s2,
+            swid=request.swid,
+        )
+    except EspnAuthRequired as exc:
+        # 401 rather than 404: the league exists, we are just not allowed in.
+        return _fail(401, str(exc), needs_cookies=True)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     service.start_warmup()

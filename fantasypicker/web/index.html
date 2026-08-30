@@ -44,9 +44,18 @@
         <div id="remembered-list" class="team-grid"></div>
       </div>
       <p class="muted">
-        Everything comes from Sleeper — rosters, scoring settings, weekly
-        matchups, and your opponent's lineup. Nothing to type in by hand.
+        Rosters, scoring settings, weekly matchups and your opponent's lineup
+        all come from your league's own site. Nothing to type in by hand.
       </p>
+
+      <div class="platform-tabs" role="tablist">
+        <button type="button" class="platform-tab active" data-platform="sleeper"
+                role="tab" aria-selected="true">Sleeper</button>
+        <button type="button" class="platform-tab" data-platform="espn"
+                role="tab" aria-selected="false">ESPN</button>
+      </div>
+
+      <div id="panel-sleeper">
       <form id="lookup-form">
         <label>
           Sleeper username
@@ -73,6 +82,47 @@
         </form>
       </details>
       <p id="connect-error" class="error" hidden></p>
+      </div>
+
+      <div id="panel-espn" hidden>
+        <form id="espn-form">
+          <label>
+            League ID or league URL
+            <input id="espn-league-id"
+                   placeholder="https://fantasy.espn.com/football/league?leagueId=123456"
+                   required>
+            <small>The <code>leagueId</code> number in your league's URL.</small>
+          </label>
+          <label>
+            Season
+            <input id="espn-season" type="number" inputmode="numeric"
+                   placeholder="current season">
+            <small>Leave blank for this season.</small>
+          </label>
+          <details id="espn-private">
+            <summary class="muted small">My league is private</summary>
+            <p class="muted small">
+              A private ESPN league needs two cookies from a browser already
+              signed in to ESPN. In that browser: press <kbd>F12</kbd>, open
+              <b>Application</b> (or <b>Storage</b>) → <b>Cookies</b> →
+              <b>espn.com</b>, and copy these two values. They are stored on
+              this machine only, in a file only you can read, and are sent to
+              nobody but ESPN.
+            </p>
+            <label>
+              espn_s2
+              <input id="espn-s2" autocomplete="off" spellcheck="false">
+            </label>
+            <label>
+              SWID
+              <input id="espn-swid" autocomplete="off" spellcheck="false"
+                     placeholder="{XXXXXXXX-XXXX-...}">
+            </label>
+          </details>
+          <button type="submit" class="primary">Connect</button>
+        </form>
+        <p id="espn-error" class="error" hidden></p>
+      </div>
     </div>
 
     <div class="card" id="loading-card" hidden>

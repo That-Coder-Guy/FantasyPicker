@@ -32,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     warm.add_argument("league_id")
     warm.add_argument("--username", default=None)
+    warm.add_argument(
+        "--espn", action="store_true", help="Read the league from ESPN, not Sleeper."
+    )
+    warm.add_argument("--season", type=int, default=None)
+    warm.add_argument("--espn-s2", default=None, help="Private ESPN leagues only.")
+    warm.add_argument("--swid", default=None, help="Private ESPN leagues only.")
     warm.add_argument("-v", "--verbose", action="store_true")
 
     leagues = sub.add_parser(
@@ -43,10 +49,16 @@ def main(argv: list[str] | None = None) -> int:
 
     doctor = sub.add_parser(
         "doctor",
-        help="Print exactly what Sleeper returns for a league — use this when "
-        "team names or rosters look wrong.",
+        help="Print exactly what the platform returns for a league — use this "
+        "when team names, rosters, or scoring look wrong.",
     )
     doctor.add_argument("league_id")
+    doctor.add_argument(
+        "--espn", action="store_true", help="Read the league from ESPN, not Sleeper."
+    )
+    doctor.add_argument("--season", type=int, default=None)
+    doctor.add_argument("--espn-s2", default=None, help="Private ESPN leagues only.")
+    doctor.add_argument("--swid", default=None, help="Private ESPN leagues only.")
     doctor.add_argument("-v", "--verbose", action="store_true")
 
     sub.add_parser("where", help="Print the cache and model directories.")
@@ -69,12 +81,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if command == "warm":
-        return _warm(args.league_id, args.username)
+        return _warm(args.league_id, args.username, args)
 
     if command == "leagues":
         return _leagues(args.username, args.season)
 
     if command == "doctor":
+        if args.espn:
+            return _doctor_espn(args.league_id, args.season, args.espn_s2, args.swid)
         return _doctor(args.league_id)
 
     return _serve(args)
@@ -198,6 +212,115 @@ def _doctor(league_id: str) -> int:
     return asyncio.run(run())
 
 
+def _doctor_espn(
+    league_id: str, season: int | None, espn_s2: str | None, swid: str | None
+) -> int:
+    """Dump what ESPN returns for a league, and how it was interpreted.
+
+    The scoring table is the important half. Every other mistake announces
+    itself — a missing team is visible, a missing player is visible — but
+    scoring translated wrongly is silent: the app keeps working and quietly
+    ranks players under rules that are not this league's. Printing each ESPN
+    setting beside the term it became makes that checkable against the league's
+    own settings page in about a minute.
+    """
+    import asyncio
+
+    from .credentials import EspnCredentials, describe as describe_credentials
+    from .credentials import load_credentials
+    from .data.crosswalk import load_crosswalk
+    from .data.nflverse import current_nfl_season
+    from .espn.client import EspnAuthRequired, EspnClient, EspnLeagueNotFound
+    from .espn.league import build_teams, parse_slots
+    from .espn.scoring import describe_items, scoring_from_espn
+
+    year = int(season or current_nfl_season())
+    if espn_s2 and swid:
+        credentials = EspnCredentials(espn_s2=espn_s2, swid=swid).normalised()
+    else:
+        credentials = load_credentials(league_id)
+
+    async def run() -> int:
+        client = EspnClient(
+            espn_s2=credentials.espn_s2 if credentials else None,
+            swid=credentials.swid if credentials else None,
+        )
+        async with client:
+            try:
+                payload = await client.league(league_id, year, fresh=True)
+                rosters = await client.rosters(league_id, year, fresh=True)
+            except EspnAuthRequired as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+        if not payload:
+            print(str(EspnLeagueNotFound(league_id, year)), file=sys.stderr)
+            return 1
+
+        settings = payload.get("settings") or {}
+        stored = describe_credentials(league_id)
+        print(f"{settings.get('name') or payload.get('name')}  ({league_id})")
+        print(
+            f"  season {year} · {settings.get('size')} teams · "
+            f"week {(payload.get('status') or {}).get('currentMatchupPeriod')}"
+        )
+        print(
+            "  cookies: "
+            + (
+                f"stored (espn_s2 {stored['espn_s2']}, SWID {stored['swid']})"
+                if stored["stored"]
+                else "none stored — fine for a public league"
+            )
+        )
+
+        slots, bench = parse_slots(settings.get("rosterSettings"))
+        print(f"\nstarting lineup: {', '.join(s.name for s in slots)}  (+{bench} bench)")
+
+        scoring = scoring_from_espn(settings.get("scoringSettings"))
+        print(f"\nscoring: {scoring.describe()}")
+        print("  ESPN setting                          value  ->  scored as")
+        for row in describe_items(settings.get("scoringSettings")):
+            if not row["points"] and not row["overrides"]:
+                continue
+            target = row["key"] or f"(ignored: {row['note']})"
+            extra = f"  {row['note']}" if row["key"] and row["note"] else ""
+            print(
+                f"  {str(row['label'])[:36]:<36} {row['points']:>6.3g}  ->  {target}{extra}"
+            )
+            for position, value in (row["overrides"] or {}).items():
+                print(f"      {position}: {value}")
+        if scoring.unsupported:
+            print(
+                "\n  These settings cannot be rebuilt from public box scores and "
+                "are scored as zero:\n    " + "\n    ".join(scoring.unsupported),
+                file=sys.stderr,
+            )
+
+        teams, unresolved = build_teams(rosters or payload, load_crosswalk())
+        print(f"\nteams: {len(teams)}")
+        for roster_id in sorted(teams):
+            team = teams[roster_id]
+            print(
+                f"  roster {roster_id:<3} {team.label[:28]:<28} "
+                f"{team.record:<7} {len(team.players):>2} players "
+                f"· {team.manager}"
+            )
+        if unresolved:
+            print(
+                f"\n{len(unresolved)} rostered players could not be matched to a "
+                "player ID, so they get no projection:",
+                file=sys.stderr,
+            )
+            for row in unresolved[:15]:
+                print(
+                    f"  {row['name']} ({row.get('position') or '?'}, "
+                    f"{row.get('team') or 'FA'}) espn_id={row.get('espn_id')}",
+                    file=sys.stderr,
+                )
+        return 0
+
+    return asyncio.run(run())
+
+
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -216,13 +339,25 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _warm(league_id: str, username: str | None) -> int:
+def _warm(
+    league_id: str, username: str | None, args: argparse.Namespace | None = None
+) -> int:
     import asyncio
 
     from .service import service
 
+    espn = bool(getattr(args, "espn", False))
+
     async def run() -> int:
-        summary = await service.connect(league_id, username)
+        if espn:
+            summary = await service.connect_espn(
+                league_id,
+                season=getattr(args, "season", None),
+                espn_s2=getattr(args, "espn_s2", None),
+                swid=getattr(args, "swid", None),
+            )
+        else:
+            summary = await service.connect(league_id, username)
         print(f"Connected to {summary['name']} ({summary['scoring']})")
         if summary.get("unsupported_scoring"):
             print(

@@ -11,6 +11,7 @@ from fantasypicker.config import get_settings
 from fantasypicker.service import PickerService
 from fantasypicker.sleeper.client import SleeperClient
 from fantasypicker.store import (
+    SCHEMA_VERSION,
     AppState,
     MAX_REMEMBERED,
     RememberedLeague,
@@ -128,7 +129,7 @@ def test_unknown_fields_in_the_file_are_ignored():
     get_settings().state_file.write_text(
         json.dumps(
             {
-                "version": 1,
+                "version": SCHEMA_VERSION,
                 "active_league_id": "1",
                 "leagues": {"1": {"league_id": "1", "name": "X", "future_field": 42}},
             }
@@ -141,7 +142,7 @@ def test_unknown_fields_in_the_file_are_ignored():
 
 def test_an_active_id_pointing_nowhere_is_dropped():
     get_settings().state_file.write_text(
-        json.dumps({"version": 1, "active_league_id": "gone", "leagues": {}}),
+        json.dumps({"version": SCHEMA_VERSION, "active_league_id": "gone", "leagues": {}}),
         encoding="utf-8",
     )
     assert load_state().active_league_id is None

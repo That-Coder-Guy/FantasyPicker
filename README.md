@@ -1,9 +1,9 @@
 # FantasyPicker
 
-A draft board and lineup optimiser for **Sleeper** fantasy football leagues. Give
-it your Sleeper username and it reads your roster, your league's scoring rules,
-and — crucially — **your opponent's roster**, every week, without anyone typing a
-player name in by hand.
+A draft board and lineup optimiser for **Sleeper** and **ESPN** fantasy football
+leagues. Point it at your league and it reads your roster, your league's scoring
+rules, and — crucially — **your opponent's roster**, every week, without anyone
+typing a player name in by hand.
 
 It then does two jobs:
 
@@ -41,12 +41,18 @@ pip install -e .
 fantasypicker serve --open
 ```
 
-Then type your **Sleeper username** — the one you log in with, not your team
-name — and pick your league from the list. That is the whole setup; the league
-ID, your team, and your opponent all follow from it.
+Then pick the tab for wherever your league is played.
 
-If you would rather paste a league ID, open "Enter a league ID instead". Both
-the bare number and the whole URL work:
+**Sleeper.** Type your **Sleeper username** — the one you log in with, not your
+team name — and pick your league from the list. That is the whole setup; the
+league ID, your team, and your opponent all follow from it.
+
+**ESPN.** Paste your league ID or the league URL. A public league needs nothing
+else. A private one needs two cookies — see
+[Private ESPN leagues](#private-espn-leagues) below.
+
+If you would rather paste a Sleeper league ID, open "Enter a league ID instead".
+Both the bare number and the whole URL work:
 
 ```
 https://sleeper.com/leagues/1048273661924872192/team
@@ -63,6 +69,49 @@ fantasypicker leagues yourname     # prints every league and its ID
 
 If that command finds your user but lists no leagues, your league is not on
 Sleeper — see [Limits worth knowing](#limits-worth-knowing).
+
+### Private ESPN leagues
+
+A **public** ESPN league needs nothing but its ID. A **private** one — the
+default for most leagues — returns "not authorised" until you supply two cookies
+from a browser that is already signed in to ESPN:
+
+1. Sign in at `fantasy.espn.com` in your normal browser.
+2. Press <kbd>F12</kbd> to open developer tools.
+3. Go to **Application** (Chrome/Edge) or **Storage** (Firefox) → **Cookies** →
+   `https://fantasy.espn.com`.
+4. Copy the values of **`espn_s2`** and **`SWID`**.
+5. Paste them into "My league is private" on the ESPN tab.
+
+These are session credentials for your own ESPN account, so they are treated as
+such: stored in `~/.fantasypicker/credentials.json` with `0600` permissions
+(only your user can read it), kept out of `state.json` so that file stays
+harmless to share, never written to a log, never returned by the API, and sent
+to nobody but `espn.com`. They are stored so you do not have to repeat this —
+ESPN expires them every few weeks, and when that happens the app says so rather
+than silently serving you last week's rosters.
+
+Nobody else in your league has to do anything. The cookies identify *you*, and
+reading the league then includes everyone's roster.
+
+From a terminal, the same thing:
+
+```bash
+fantasypicker warm <league_id> --espn --espn-s2 <value> --swid <value>
+```
+
+### Checking an ESPN league was read correctly
+
+```bash
+fantasypicker doctor <league_id> --espn
+```
+
+This prints the roster slots, every team with its record and roster size, any
+player whose identity could not be resolved — and, most usefully, **every ESPN
+scoring setting beside the term it was translated into**. Scoring is the one
+setting whose mistranslation is invisible: the app would keep working and
+quietly rank players under rules that are not yours. Comparing that table
+against your league's settings page takes a minute and rules it out.
 
 ### When teams show up as "Team 4"
 
@@ -125,13 +174,22 @@ your own.
 | Source | What it provides | Access |
 | --- | --- | --- |
 | [Sleeper API](https://docs.sleeper.com) | Leagues, rosters, matchups, live draft picks, injury status, trending adds | Public, no auth |
+| [ESPN fantasy API](https://fantasy.espn.com) | ESPN leagues: rosters, scoring settings, schedule, draft picks | Undocumented; public leagues need no auth, private ones need your own cookies |
 | [nflverse](https://github.com/nflverse/nflverse-data) | Weekly box scores, snap counts, depth charts, injury reports, 1999–present | Public releases |
 | [nfldata](https://github.com/nflverse/nfldata) | Schedules with betting lines, rest days, weather, venue | Public |
-| [DynastyProcess](https://github.com/dynastyprocess/data) | Sleeper ↔ nflverse ↔ FantasyPros ID crosswalk; consensus draft rankings with their spread | Public |
+| [DynastyProcess](https://github.com/dynastyprocess/data) | Sleeper ↔ ESPN ↔ nflverse ↔ FantasyPros ID crosswalk; consensus draft rankings with their spread | Public |
 
 No API key is needed for any of them, and none of them is scraped — these are
 all published, maintained data feeds. Sleeper's read endpoints require no
 authentication at all, which is what makes automatic opponent lookup possible.
+ESPN's are undocumented but are the same ones espn.com's own front end calls,
+and a private league is read with your own session cookies rather than by
+working around anything.
+
+Sleeper's player endpoints double as a league-independent database of the NFL —
+names, positions, injury designations, waiver-wire buzz — so they are used for
+an ESPN league too. Whether a receiver is questionable has nothing to do with
+where your league is hosted.
 
 ---
 
@@ -400,9 +458,10 @@ The web app is a client of a plain JSON API, so it is scriptable:
 POST /api/leagues       {username, season?} -> that user's leagues and IDs
 GET  /api/known         leagues this machine has connected to before
 DEL  /api/known/{id}    forget one
-POST /api/connect       {league_id, username?}
+POST /api/connect       {league_id, username?}          Sleeper
+POST /api/connect/espn  {league_id, season?, espn_s2?, swid?}
 GET  /api/status        loading progress + remembered leagues
-POST /api/refresh       re-poll Sleeper for rosters and injury status now
+POST /api/refresh       re-poll the platform for rosters and injury status now
 POST /api/team          {roster_id}
 GET  /api/draft         live draft recommendations
 GET  /api/board         full ranked board  ?position=RB&limit=200
@@ -421,15 +480,16 @@ while the model trains, rather than blocking.
 
 ## Limits worth knowing
 
-- **Sleeper only.** ESPN, Yahoo, and NFL.com leagues cannot be read. This is not
-  an oversight so much as a consequence of how those platforms work: Sleeper
-  publishes a documented read API that needs no authentication, which is what
-  makes "look up my opponent's roster" a single unauthenticated call. ESPN's
-  equivalent is undocumented and needs your `espn_s2` and `SWID` cookies for a
-  private league; Yahoo's requires registering an OAuth app and a browser
-  consent flow; NFL.com has no public read path at all. Each is a real project
-  rather than a config switch. If your league is on one of them, say so and it
-  can be built — ESPN is the least painful of the three.
+- **Sleeper and ESPN only.** Yahoo and NFL.com leagues cannot be read. Yahoo
+  requires registering an OAuth app and a browser consent flow; NFL.com has no
+  public read path at all. Both are real projects rather than config switches.
+
+- **A few ESPN scoring settings cannot be reproduced.** Anything needing
+  play-by-play rather than a box score — "40+ yard TD bonus", "1pt safety",
+  per-game rate stats — is scored as zero and named out loud at connect time
+  and by `fantasypicker doctor --espn`. Everything a weekly box score supports,
+  including ESPN's banded milestones and per-position reception values, is
+  translated exactly.
 
 - **Weekly fantasy football is mostly noise.** The model beats a rolling average
   by 10–14%. It will still tell you to start someone who scores three points.

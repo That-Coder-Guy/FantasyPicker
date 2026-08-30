@@ -26,7 +26,9 @@ from .config import get_settings
 log = logging.getLogger(__name__)
 
 #: Bump when the shape below changes incompatibly; older files are discarded.
-SCHEMA_VERSION = 1
+#: 2 added ``platform``, since a remembered league is now not necessarily a
+#: Sleeper one and reopening it against the wrong API would simply fail.
+SCHEMA_VERSION = 2
 
 #: Keep the recent list short enough to render as buttons without a scrollbar.
 MAX_REMEMBERED = 12
@@ -39,6 +41,8 @@ class RememberedLeague:
     league_id: str
     name: str = ""
     season: str = ""
+    #: "sleeper" or "espn" — which API this league is read from.
+    platform: str = "sleeper"
     username: str | None = None
     user_id: str | None = None
     my_roster_id: int | None = None

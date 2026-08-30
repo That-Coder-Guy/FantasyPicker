@@ -136,3 +136,67 @@ def test_index_page_is_served(client):
     response = http.get("/")
     assert response.status_code == 200
     assert "FantasyPicker" in response.text
+
+
+# ---------------------------------------------------------------------- espn
+
+
+@pytest.fixture
+def espn_client(client, monkeypatch):
+    """The API fixture, with ESPN stubbed as well."""
+    from fantasypicker.data.crosswalk import Crosswalk
+    from fantasypicker.espn.client import EspnClient
+
+    from .test_espn import LEAGUE, stub_transport as espn_stub
+
+    def make(*args, **kwargs):
+        kwargs.pop("client", None)
+        return EspnClient(
+            client=httpx.AsyncClient(transport=espn_stub({"mRoster": LEAGUE})), **kwargs
+        )
+
+    crosswalk = Crosswalk(espn_to_sleeper={"3139477": "4034", "4241457": "6794"})
+    monkeypatch.setattr("fantasypicker.platforms.EspnClient", make)
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", lambda: crosswalk)
+    monkeypatch.setattr("fantasypicker.espn.league.load_crosswalk", lambda *a, **k: crosswalk)
+    return client
+
+
+def test_connecting_to_an_espn_league(espn_client):
+    api, service = espn_client
+    response = api.post("/api/connect/espn", json={"league_id": "999", "season": 2026})
+    assert response.status_code == 200
+    league = response.json()["league"]
+    assert league["platform"] == "espn"
+    assert league["name"] == "Test ESPN League"
+
+
+def test_a_private_espn_league_answers_401_with_instructions(client, monkeypatch):
+    """The UI opens the cookie fields off the back of this, so it must be a 401."""
+    from fantasypicker.espn.client import EspnAuthRequired
+
+    async def refuse(self, league_id, season, *, fresh=False):
+        raise EspnAuthRequired(league_id, had_cookies=False)
+
+    monkeypatch.setattr("fantasypicker.espn.client.EspnClient.league", refuse)
+    api, _ = client
+    response = api.post("/api/connect/espn", json={"league_id": "999"})
+    assert response.status_code == 401
+    body = response.json()
+    assert body["needs_cookies"] is True
+    assert "espn_s2" in body["error"]
+
+
+def test_espn_cookies_are_never_echoed_back(espn_client):
+    api, _ = espn_client
+    response = api.post(
+        "/api/connect/espn",
+        json={
+            "league_id": "999",
+            "season": 2026,
+            "espn_s2": "super-secret-value",
+            "swid": "{ABC}",
+        },
+    )
+    assert response.status_code == 200
+    assert "super-secret-value" not in response.text

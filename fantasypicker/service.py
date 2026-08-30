@@ -43,8 +43,11 @@ from .model.predict import (
     project_week,
 )
 from .model.train import ProjectionModel, load_model, train_model
+from .credentials import EspnCredentials, load_credentials, save_credentials
+from .espn import league as espn_league
+from .platforms import EspnSource, LeagueSource, SleeperSource
 from .sleeper.client import SleeperClient
-from .sleeper.league import LeagueContext, load_league, refresh_teams
+from .sleeper.league import LeagueContext, load_league
 from .sleeper.scoring import ScoringRules
 from .store import AppState, RememberedLeague, load_state, save_state
 
@@ -89,11 +92,18 @@ class PickerService:
     league_id: str | None = None
     username: str | None = None
     user_id: str | None = None
+    #: Which platform the open league is read from, and the adapter that does it.
+    platform: str = "sleeper"
+    source: LeagueSource = field(default_factory=SleeperSource)
 
     league: LeagueContext | None = None
     players: dict[str, dict] = field(default_factory=dict)
     crosswalk: Crosswalk | None = None
     ranks: pd.DataFrame | None = None
+
+    #: ESPN roster entries whose identity could not be resolved, so the UI can
+    #: say which players it is projecting nothing for instead of hiding them.
+    unresolved_players: list[dict] = field(default_factory=list)
 
     panel: pd.DataFrame | None = None
     model: ProjectionModel | None = None
@@ -189,6 +199,8 @@ class PickerService:
             self.players = await client.players()
             league = await load_league(client, league_id, username=username)
 
+        self.platform = "sleeper"
+        self.source = SleeperSource()
         remembered = self.state.get(league_id)
         self.league_id = league_id
         self.username = username or (remembered.username if remembered else None)
@@ -205,6 +217,71 @@ class PickerService:
         if league.my_roster_id is None and remembered is not None:
             if remembered.my_roster_id in league.teams:
                 league.my_roster_id = remembered.my_roster_id
+        return await self._finish_connect(league, state)
+
+    async def connect_espn(
+        self,
+        league_id: str,
+        *,
+        season: int | None = None,
+        espn_s2: str | None = None,
+        swid: str | None = None,
+    ) -> dict[str, Any]:
+        """Load an ESPN-hosted league.
+
+        Credentials are only needed for a private league. Ones passed here are
+        stored for next time; ones stored earlier are reused, so a private
+        league is reconnected without going back to developer tools.
+        """
+        league_id = _clean_league_id(league_id)
+        season = int(season or current_nfl_season())
+
+        credentials: EspnCredentials | None = None
+        if espn_s2 and swid:
+            credentials = EspnCredentials(espn_s2=espn_s2, swid=swid).normalised()
+        else:
+            credentials = load_credentials(league_id)
+
+        source = EspnSource(season, credentials)
+        async with source.client() as client:
+            league, unresolved = await espn_league.load_league(
+                client, league_id, season
+            )
+            payload = await client.league(league_id, season)
+
+        # Only persist credentials that actually worked.
+        if credentials is not None and (espn_s2 and swid):
+            save_credentials(league_id, credentials)
+
+        self.platform = "espn"
+        self.source = source
+        self.league_id = league_id
+        self.league = league
+        self.unresolved_players = unresolved
+        async with SleeperClient() as client:
+            self.players = await client.players()
+        self.crosswalk = load_crosswalk(self.players)
+
+        remembered = self.state.get(league_id)
+        self.username = remembered.username if remembered else None
+        self.user_id = credentials.swid if credentials else None
+
+        # ESPN names the user's own team via the SWID cookie; a hand-picked
+        # team from last time is the fallback when the league is public.
+        if credentials is not None:
+            league.my_roster_id = espn_league.find_my_roster_id(
+                payload, credentials.swid
+            )
+        if league.my_roster_id is None and remembered is not None:
+            if remembered.my_roster_id in league.teams:
+                league.my_roster_id = remembered.my_roster_id
+        return await self._finish_connect(league)
+
+    async def _finish_connect(
+        self, league: LeagueContext, state: dict | None = None
+    ) -> dict[str, Any]:
+        """The half of connecting that does not depend on the platform."""
+        assert self.crosswalk is not None
 
         try:
             self.ranks = load_expert_ranks(
@@ -271,12 +348,13 @@ class PickerService:
 
         changed = {"rosters": False, "players": False}
         try:
+            # An explicit refresh bypasses the disk cache; the throttled
+            # background one is happy to be served from it.
+            changed["rosters"] = await self.source.refresh(self.league, fresh=force)
+            # Injury designations come from Sleeper's player file whichever
+            # platform hosts the league — it is a database of the NFL, not of
+            # anyone's league.
             async with SleeperClient() as client:
-                # An explicit refresh bypasses the disk cache; the throttled
-                # background one is happy to be served from it.
-                changed["rosters"] = await refresh_teams(
-                    client, self.league, fresh=force
-                )
                 players = await client.players(fresh=force)
         except FetchError as exc:
             # Never fail a page because a refresh could not reach Sleeper; the
@@ -303,6 +381,7 @@ class PickerService:
         my_team = league.my_team
         return {
             "connected": True,
+            "platform": self.platform,
             "league_id": league.league_id,
             "name": league.name,
             "season": league.season,
@@ -318,6 +397,7 @@ class PickerService:
             "my_roster_id": league.my_roster_id,
             "my_team": my_team.label if my_team else None,
             "known_leagues": self.known_leagues(),
+            "unresolved_players": self.unresolved_players[:20],
             "teams_list": [
                 {
                     "roster_id": t.roster_id,
@@ -364,6 +444,7 @@ class PickerService:
                 scoring_key=scoring_key(league.scoring),
                 teams=league.team_count,
                 superflex=league.is_superflex,
+                platform=self.platform,
             )
         )
         save_state(self.state)
@@ -397,7 +478,17 @@ class PickerService:
         if remembered is None:
             return None
         try:
-            summary = await self.connect(remembered.league_id, remembered.username)
+            if (remembered.platform or "sleeper") == "espn":
+                # Stored cookies are picked up inside connect_espn, so a private
+                # league reopens without asking for them again.
+                summary = await self.connect_espn(
+                    remembered.league_id,
+                    season=int(remembered.season) if remembered.season else None,
+                )
+            else:
+                summary = await self.connect(
+                    remembered.league_id, remembered.username
+                )
         except (ValueError, FetchError) as exc:
             # A league that has since been deleted, or no network on boot.
             log.warning(
@@ -570,8 +661,7 @@ class PickerService:
         if my_team is None:
             raise ValueError(f"No roster {roster_id} in this league.")
 
-        async with SleeperClient() as client:
-            pairing = await league.matchup_for(client, week, roster_id)
+        pairing = await league.matchup_for(self.source, week, roster_id)
 
         projections = await self.projections_for_week(week)
         return await asyncio.to_thread(
@@ -596,16 +686,7 @@ class PickerService:
         assert self.league is not None and self.season_projections is not None
         league = self.league
 
-        async with SleeperClient() as client:
-            drafts = await client.league_drafts(league.league_id)
-            draft_obj = None
-            picks: list[dict] = []
-            if drafts:
-                # Sleeper lists newest first; the live one is the one not complete.
-                draft_obj = next(
-                    (d for d in drafts if d.get("status") != "complete"), drafts[0]
-                )
-                picks = await client.draft_picks(str(draft_obj.get("draft_id")))
+        draft_obj, picks = await self.source.draft(league)
 
         state = draft_engine.parse_draft_state(draft_obj, picks, my_user_id=self.user_id)
         drafted = set(state.drafted)
@@ -740,9 +821,14 @@ class PickerService:
         # week — asking for it yields an empty projection set and an empty page.
         week = max(1, int(week or league.current_week or 1))
 
-        async with SleeperClient() as client:
-            matchup_rows = await league.load_matchups(client, week)
-            draft_order = await self._draft_order(client)
+        matchup_rows = await league.load_matchups(self.source, week)
+        try:
+            # Pre-draft, slot order is the only thing distinguishing empty
+            # teams — but it is a nice-to-have, never a reason to fail the page.
+            draft_order = await self.source.draft_order(league)
+        except (FetchError, ValueError) as exc:
+            log.debug("draft order unavailable: %s", exc)
+            draft_order = {}
 
         projections = await self.projections_for_week(week)
         views = await asyncio.to_thread(
@@ -763,32 +849,6 @@ class PickerService:
                 k: round(v, 1) for k, v in league_view.league_averages(views).items()
             },
         }
-
-    async def _draft_order(self, client: SleeperClient) -> dict[str, int]:
-        """user_id -> draft slot, so the League page means something pre-draft.
-
-        Before anyone has drafted every roster is empty and every projection is
-        zero; draft position is the only thing that actually distinguishes the
-        teams, so it is worth the one extra (cached) call.
-        """
-        assert self.league is not None
-        try:
-            drafts = await client.league_drafts(self.league.league_id)
-        except FetchError:
-            return {}
-        if not drafts:
-            return {}
-        draft = next((d for d in drafts if d.get("status") != "complete"), drafts[0])
-        order = draft.get("draft_order") or {}
-        if not isinstance(order, dict):
-            return {}
-        out: dict[str, int] = {}
-        for user_id, slot in order.items():
-            try:
-                out[str(user_id)] = int(slot)
-            except (TypeError, ValueError):
-                continue
-        return out
 
     async def player_detail(self, sleeper_id: str, week: int | None = None) -> dict[str, Any]:
         self._require_ready()

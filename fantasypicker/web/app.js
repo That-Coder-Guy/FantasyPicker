@@ -272,6 +272,54 @@ $("connect-form").addEventListener("submit", async (event) => {
   }
 });
 
+/* ------------------------------------------------------------------- platform */
+
+document.querySelectorAll(".platform-tab").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    const wanted = tab.dataset.platform;
+    document.querySelectorAll(".platform-tab").forEach((other) => {
+      const on = other === tab;
+      other.classList.toggle("active", on);
+      other.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    $("panel-sleeper").hidden = wanted !== "sleeper";
+    $("panel-espn").hidden = wanted !== "espn";
+  });
+});
+
+$("espn-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = event.target.querySelector("button");
+  button.disabled = true;
+  $("espn-error").hidden = true;
+  const season = $("espn-season").value.trim();
+  try {
+    const data = await api("/api/connect/espn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        league_id: $("espn-league-id").value.trim(),
+        season: season ? Number(season) : null,
+        espn_s2: $("espn-s2").value.trim() || null,
+        swid: $("espn-swid").value.trim() || null,
+      }),
+    });
+    applyLeague(data.league);
+    $("loading-card").hidden = false;
+    pollStatus();
+  } catch (error) {
+    $("espn-error").textContent = error.message;
+    $("espn-error").hidden = false;
+    // A private league needs cookies; open that section rather than making
+    // the user find it after reading the error.
+    if (/cookie|espn_s2|SWID/i.test(error.message)) {
+      $("espn-private").open = true;
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
+
 /* --------------------------------------------------------- remembered leagues */
 
 function renderRemembered(leagues) {

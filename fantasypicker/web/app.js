@@ -28,6 +28,21 @@ const fmt = (value, digits = 1) =>
   value === null || value === undefined || Number.isNaN(value) ? "–" : Number(value).toFixed(digits);
 const pct = (value, digits = 1) =>
   value === null || value === undefined ? "–" : `${(Number(value) * 100).toFixed(digits)}%`;
+/* A header must sit over its column the way the cells do: a left-aligned
+ * label above right-aligned numbers reads as two different columns. Mark
+ * numeric columns with num("...") and the header inherits the alignment. */
+const num = (label) => ({ label, num: true });
+const tableHead = (labels) => {
+  const head = el("thead");
+  const row = el("tr");
+  labels.forEach((label) => {
+    const isNum = typeof label === "object" && label.num;
+    row.append(el("th", isNum ? "num-col" : null, isNum ? label.label : label));
+  });
+  head.append(row);
+  return head;
+};
+
 const posSpan = (position) => {
   const node = el("span", `pos pos-${position}`, position);
   return node;
@@ -670,13 +685,11 @@ function renderSwaps(swaps, players) {
 function renderMatchupPlayers(players) {
   const table = $("matchup-players");
   table.innerHTML = "";
-  const head = el("thead");
-  const headRow = el("tr");
-  ["Player", "Pos", "Team", "Opp", "Proj", "Floor", "Ceiling", "P(play)", "Slot"].forEach((label) => {
-    headRow.append(el("th", null, label));
-  });
-  head.append(headRow);
-  table.append(head);
+  table.append(
+    tableHead(
+      ["Player", "Pos", "Team", "Opp", num("Proj"), num("Floor"), num("Ceiling"), num("P(play)"), "Slot"]
+    )
+  );
 
   const body = el("tbody");
   (players || []).forEach((player) => {
@@ -910,13 +923,11 @@ function renderBoard() {
     (row) => !query || String(row.name).toLowerCase().includes(query)
   );
   table.innerHTML = "";
-  const head = el("thead");
-  const headRow = el("tr");
-  ["#", "Player", "Pos", "Team", "Proj", "VOR", "Tier", "ADP", "±", "Bye", "Range"].forEach((label) =>
-    headRow.append(el("th", null, label))
+  table.append(
+    tableHead(
+      ["#", "Player", "Pos", "Team", num("Proj"), num("VOR"), num("Tier"), num("ADP"), num("±"), num("Bye"), "Range"]
+    )
   );
-  head.append(headRow);
-  table.append(head);
 
   const body = el("tbody");
   // Scale the range bars across what is actually on screen. Anchoring at zero
@@ -979,13 +990,11 @@ async function loadWaivers() {
   try {
     const data = await api("/api/waivers");
     table.innerHTML = "";
-    const head = el("thead");
-    const headRow = el("tr");
-    ["Player", "Pos", "Team", "ROS pts", "Roster gain", "This week", "Adds (24h)", "Note"].forEach(
-      (label) => headRow.append(el("th", null, label))
+    table.append(
+      tableHead(
+        ["Player", "Pos", "Team", num("ROS pts"), num("Roster gain"), num("This week"), num("Adds (24h)"), "Note"]
+      )
     );
-    head.append(headRow);
-    table.append(head);
 
     const body = el("tbody");
     if (!data.targets.length) {
@@ -1147,13 +1156,11 @@ async function loadModel() {
     card.append(el("h3", null, "Validation — held-out season"));
     const wrap = el("div", "table-wrap");
     const table = el("table", "data");
-    const head = el("thead");
-    const headRow = el("tr");
-    ["Pos", "Season", "n", "MAE", "Baseline MAE", "RMSE", "Spearman", "Bias"].forEach((label) =>
-      headRow.append(el("th", null, label))
+    table.append(
+      tableHead(
+        ["Pos", "Season", num("n"), num("MAE"), num("Baseline MAE"), num("RMSE"), num("Spearman"), num("Bias")]
+      )
     );
-    head.append(headRow);
-    table.append(head);
     const body = el("tbody");
     Object.entries(data.validation).forEach(([position, metrics]) => {
       const tr = el("tr");

@@ -205,6 +205,9 @@ table tbody tr:last-child td { border-bottom: none; }
 table tbody tr.clickable { cursor: pointer; }
 table tbody tr.clickable:hover { background: var(--panel-2); }
 .num-col { text-align: right; font-family: var(--mono); }
+/* A numeric column's header right-aligns with its cells but keeps header
+   type — the mono digits belong to the data, not the label. */
+table th.num-col { font-family: inherit; }
 /* Wide tables scroll inside their own container rather than making the page
    scroll sideways. The wrapper does the scrolling so the table keeps normal
    table layout and still fills the card. */

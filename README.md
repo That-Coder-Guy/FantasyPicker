@@ -300,6 +300,13 @@ Five tabs:
   ranked by what they do to your odds. The opponent's roster is fetched
   automatically; you choose whether to model them as they have their lineup set
   or at their best.
+- **League** — every team in the league, ranked by the best lineup its roster
+  could field, with that lineup laid out. Toggle to what each manager actually
+  has set, and the difference is shown: who is leaving points on their bench,
+  and how many. Per-position strength chips compare each roster to the league
+  average, so it is obvious at a glance who is deep at running back and who is
+  about to be short at tight end. Benches expand on request. This is the trade
+  and waiver scouting view.
 - **Board** — the full ranked board with VOR, tiers, ADP, consensus spread, bye
   weeks, and a floor-to-ceiling range bar. Filter by position, search by name.
 - **Waivers** — free agents ranked by what they would add to your roster over
@@ -357,6 +364,7 @@ arithmetic over a cached frame rather than a re-projection.
 | --- | --- |
 | Draft tab open | Re-checks every 20s; the **Live refresh** toggle drops that to 6s for an active draft |
 | Matchup tab open | Every 90s |
+| League tab open | Every 2 minutes |
 | Waivers / Board | Every 3 / 5 minutes |
 | Tab refocused | Immediately — a window left open overnight does not show yesterday's rosters |
 | **Refresh** button | Immediately, bypassing the disk cache entirely |
@@ -381,6 +389,7 @@ POST /api/team          {roster_id}
 GET  /api/draft         live draft recommendations
 GET  /api/board         full ranked board  ?position=RB&limit=200
 GET  /api/matchup       ?week=4&opponent_mode=auto|declared|optimal&sims=20000
+GET  /api/teams         ?week=4 — every team, its lineup, bench and strengths
 GET  /api/waivers       ?week=4
 GET  /api/player/{id}   projection, context, and game log
 GET  /api/model         the model card
@@ -430,7 +439,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 128 tests, no network access required
+pytest                          # 151 tests, no network access required
 fantasypicker serve --reload
 ```
 
@@ -446,7 +455,8 @@ fantasypicker/
   sleeper/     API client, league shape, scoring rules
   data/        nflverse loaders, ID crosswalk, consensus rankings
   model/       panel construction, features, quantile training, prediction
-  engine/      simulator, correlations, lineups, draft, waivers, matchup
+  engine/      simulator, correlations, lineups, draft, waivers, matchup,
+               league-wide team view
   web/         the dashboard (no build step)
   service.py   the one object that holds a loaded league
   store.py     remembered leagues, per league, on disk

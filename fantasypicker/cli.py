@@ -193,6 +193,8 @@ def _doctor(league_id: str) -> int:
                 f"  roster {roster_id:<3} owner={team.owner_id or 'none':<24} "
                 f"label={team.label!r}{flag}"
             )
+            if team.avatar_url:
+                print(f"      picture: {team.avatar_url}")
 
         if empty_seats:
             print(
@@ -303,6 +305,13 @@ def _doctor_espn(
                 f"  roster {roster_id:<3} {team.label[:28]:<28} "
                 f"{team.record:<7} {len(team.players):>2} players "
                 f"· {team.manager}"
+            )
+            print(f"      picture: {team.avatar_url or '(none in ESPN response)'}")
+        if not any(t.avatar_url for t in teams.values()):
+            print(
+                "\nESPN returned no team logos for this league. The app shows "
+                "each team's initials instead; there is no picture to fetch.",
+                file=sys.stderr,
             )
         if unresolved:
             print(

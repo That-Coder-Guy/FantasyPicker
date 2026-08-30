@@ -54,7 +54,15 @@ function teamAvatar(url, label, size) {
     img.src = url;
     img.alt = "";
     img.loading = "lazy";
-    img.addEventListener("error", fallback);
+    // Some CDNs refuse hotlinked images based on the Referer header; sending
+    // none is the setting most likely to be allowed.
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => {
+      // Make a blocked or dead image URL visible in devtools instead of
+      // silently looking identical to "this team has no picture".
+      console.warn(`team picture failed to load for ${label}:`, url);
+      fallback();
+    });
     wrap.append(img);
   } else {
     fallback();

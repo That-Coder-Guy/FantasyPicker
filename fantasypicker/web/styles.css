@@ -213,6 +213,29 @@ table tbody tr.clickable:hover { background: var(--panel-2); }
 .swap .delta { font-family: var(--mono); font-weight: 600; }
 .delta.pos { color: var(--good); } .delta.neg { color: var(--bad); }
 
+/* ---- league view ---- */
+.teams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 1rem; align-items: start; }
+.team-card { margin-bottom: 0; }
+.team-card.mine { border-color: var(--accent); }
+.team-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; margin-bottom: .6rem; }
+.team-name { font-weight: 600; display: flex; align-items: center; gap: .4rem; }
+.team-rank {
+  display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px;
+  font: 600 .74rem var(--mono); color: var(--muted);
+}
+.team-score { text-align: right; }
+.team-score b { display: block; font: 700 1.3rem/1 var(--mono); }
+.team-score span { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.tag {
+  margin-left: .35rem; padding: 0 .35rem; border-radius: 99px; font-size: .68rem;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.tag.warn { color: var(--warn); border-color: var(--warn); }
+.strength-row { display: flex; gap: .3rem; flex-wrap: wrap; margin-top: .6rem; }
+.strength-row .chip { gap: .25rem; font-family: var(--mono); font-size: .74rem; }
+.lineup.bench td { opacity: .75; }
+
 /* ---- teams ---- */
 .team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .5rem; }
 .team-btn { text-align: left; padding: .6rem .7rem; }

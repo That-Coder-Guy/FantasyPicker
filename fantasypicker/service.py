@@ -30,6 +30,7 @@ from .data.crosswalk import Crosswalk, load_crosswalk, normalize_team
 from .data.nflverse import current_nfl_season
 from .data.rankings import load_expert_ranks
 from .engine import draft as draft_engine
+from .engine import league_view
 from .engine import waivers as waiver_engine
 from .engine.correlations import CorrelationModel, estimate_correlations
 from .engine.matchup import MatchupAnalysis, analyze_matchup
@@ -215,12 +216,32 @@ class PickerService:
             log.warning("expert ranks unavailable: %s", exc)
             self.ranks = pd.DataFrame()
 
-        # A new league invalidates anything trained for the previous one.
-        self.model = None
-        self.panel = None
-        self.season_projections = None
-        self.weekly_projections = {}
-        self.status = LoadStatus(stage="connected", detail=league.name, progress=0.05)
+        # Anything trained for a differently-scored league is now wrong. Scoring
+        # is the test rather than the league ID, because a model is fitted to
+        # scoring rules and nothing else — reconnecting to the same league, or
+        # switching between two that score identically, should keep everything
+        # already in memory rather than re-warming from scratch.
+        from .model.train import scoring_key  # local: keeps LightGBM off the import path
+
+        new_key = scoring_key(league.scoring)
+        fully_loaded = (
+            self.model is not None
+            and self.panel is not None
+            and self.season_projections is not None
+        )
+        if fully_loaded and self.model.scoring_key == new_key:
+            log.info("reusing the loaded model — scoring is unchanged")
+            self.status = LoadStatus(
+                stage="ready", detail="Projections ready", progress=1.0
+            )
+        else:
+            self.model = None
+            self.panel = None
+            self.season_projections = None
+            self.weekly_projections = {}
+            self.status = LoadStatus(
+                stage="connected", detail=league.name, progress=0.05
+            )
         self.last_refresh = time.time()
         self._remember()
         return self.describe(state)
@@ -707,6 +728,36 @@ class PickerService:
             "targets": [t.as_dict() for t in report.targets],
             "droppable": report.droppable,
             "notes": report.notes,
+        }
+
+    async def league_teams(self, week: int | None = None) -> dict[str, Any]:
+        """Every team in the league with its lineup for the week."""
+        self._require_ready()
+        await self.refresh_live()
+        assert self.league is not None
+        league = self.league
+        week = int(week or league.current_week)
+
+        async with SleeperClient() as client:
+            matchup_rows = await league.load_matchups(client, week)
+
+        projections = await self.projections_for_week(week)
+        views = await asyncio.to_thread(
+            lambda: league_view.build_league_view(
+                league,
+                projections,
+                season_projections=self.season_projections,
+                matchup_rows=matchup_rows,
+            )
+        )
+        return {
+            "week": week,
+            "my_roster_id": league.my_roster_id,
+            "slots": [s.name for s in league.slots],
+            "teams": [v.as_dict() for v in views],
+            "averages": {
+                k: round(v, 1) for k, v in league_view.league_averages(views).items()
+            },
         }
 
     async def player_detail(self, sleeper_id: str, week: int | None = None) -> dict[str, Any]:

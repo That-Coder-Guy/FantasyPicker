@@ -265,3 +265,60 @@ async def test_known_leagues_flags_the_active_one(service):
     assert rows[0]["is_active"] is True
     # No model has been trained in this temp home.
     assert rows[0]["model_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_reconnecting_to_the_same_scoring_keeps_the_loaded_model(service):
+    """A re-warm on every reconnect would make the startup reopen pointless."""
+
+    class FakeModel:
+        scoring_key = None
+
+    await service.connect("999", "alice")
+    from fantasypicker.model.train import scoring_key
+
+    fake = FakeModel()
+    fake.scoring_key = scoring_key(service.league.scoring)
+    service.model = fake
+    service.panel = object()
+    service.season_projections = object()
+
+    await service.connect("999", "alice")
+    assert service.model is fake
+    assert service.status.stage == "ready"
+
+
+@pytest.mark.asyncio
+async def test_different_scoring_discards_the_loaded_model(service):
+    class FakeModel:
+        scoring_key = "a-different-league-entirely"
+
+    await service.connect("999", "alice")
+    service.model = FakeModel()
+    service.panel = object()
+    service.season_projections = object()
+
+    await service.connect("999", "alice")
+    assert service.model is None
+    assert service.status.stage == "connected"
+
+
+@pytest.mark.asyncio
+async def test_a_half_loaded_state_still_warms_up(service):
+    """Model present but projections missing is not 'ready'."""
+
+    class FakeModel:
+        scoring_key = None
+
+    await service.connect("999", "alice")
+    from fantasypicker.model.train import scoring_key
+
+    fake = FakeModel()
+    fake.scoring_key = scoring_key(service.league.scoring)
+    service.model = fake
+    service.panel = None  # warm-up never finished
+    service.season_projections = None
+
+    await service.connect("999", "alice")
+    assert service.model is None
+    assert service.status.stage == "connected"

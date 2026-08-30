@@ -224,6 +224,12 @@ async def board(
     return await service.draft_board(position=position, limit=limit)
 
 
+@app.get("/api/teams")
+async def teams(week: int | None = None) -> dict[str, Any]:
+    """Every team in the league and the lineup each of them can field."""
+    return await service.league_teams(week)
+
+
 @app.get("/api/waivers")
 async def waivers(week: int | None = None, roster_id: int | None = None) -> dict[str, Any]:
     return await service.waivers(week, roster_id=roster_id)

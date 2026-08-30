@@ -10,6 +10,7 @@ const state = {
   view: "connect",
   boardPosition: null,
   boardRows: [],
+  teams: null,
   draftTimer: null,
   refreshTimer: null,
 };
@@ -72,6 +73,7 @@ function showError(node, error) {
 const LOADERS = {
   draft: loadDraft,
   matchup: loadMatchup,
+  teams: loadTeams,
   board: loadBoard,
   waivers: loadWaivers,
   model: loadModel,
@@ -99,7 +101,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
  * Sleeper at most every 30s regardless, so these are about how quickly a change
  * that already reached the server reaches the screen. The draft board is the
  * one place seconds matter; the model card never changes at all. */
-const REFRESH_SECONDS = { draft: 20, matchup: 90, board: 300, waivers: 180, model: 0 };
+const REFRESH_SECONDS = { draft: 20, matchup: 90, teams: 120, board: 300, waivers: 180, model: 0 };
 
 function scheduleAutoRefresh() {
   clearInterval(state.refreshTimer);
@@ -337,6 +339,7 @@ function applyLeague(league) {
   ].filter(Boolean);
   $("league-line").textContent = bits.join(" · ");
   $("matchup-week").value = league.current_week;
+  if (!$("teams-week").value) $("teams-week").value = league.current_week;
 
   if (!league.my_roster_id) {
     $("team-card").hidden = false;
@@ -644,6 +647,154 @@ function renderMatchupPlayers(players) {
     body.append(tr);
   });
   table.append(body);
+}
+
+/* ------------------------------------------------------------------ league */
+
+$("teams-refresh").addEventListener("click", () => refreshCurrentView());
+$("teams-week").addEventListener("change", () => loadTeams());
+$("teams-mode").addEventListener("change", () => renderTeams());
+$("teams-bench").addEventListener("change", () => renderTeams());
+
+async function loadTeams() {
+  const grid = $("teams-grid");
+  try {
+    const week = $("teams-week").value || (state.league && state.league.current_week) || 1;
+    state.teams = await api(`/api/teams?week=${week}`);
+    renderTeams();
+  } catch (error) {
+    showError(grid, error);
+  }
+}
+
+function renderTeams() {
+  const data = state.teams;
+  const grid = $("teams-grid");
+  const summary = $("teams-summary");
+  grid.innerHTML = "";
+  summary.innerHTML = "";
+  if (!data || !data.teams) return;
+
+  const declared = $("teams-mode").value === "declared";
+  const showBench = $("teams-bench").checked;
+  const teams = data.teams.slice().sort((a, b) =>
+    declared ? b.declared_points - a.declared_points : b.projected_points - a.projected_points
+  );
+
+  summary.append(el("h2", null, `Week ${data.week} — every team`));
+  summary.append(
+    el(
+      "p",
+      "muted small",
+      declared
+        ? "Ranked by the lineup each manager currently has set. Teams that have not set one show their best possible instead."
+        : `Ranked by the best lineup each roster could field — the honest measure of team strength, ` +
+          `independent of whether the manager has logged in. League average ${fmt(data.averages.projected_points)}.`
+    )
+  );
+
+  teams.forEach((team, index) => {
+    const points = declared ? team.declared_points : team.projected_points;
+    const card = el("div", `card team-card${team.is_me ? " mine" : ""}`);
+
+    const head = el("div", "team-head");
+    const left = el("div");
+    const title = el("div", "team-name");
+    title.append(el("span", "team-rank", `${index + 1}`));
+    title.append(document.createTextNode(team.label));
+    if (team.is_me) title.append(el("span", "tag", "you"));
+    left.append(title);
+    const meta = [team.owner, team.record, `${fmt(team.points_for, 0)} pts for`]
+      .filter(Boolean)
+      .join(" · ");
+    left.append(el("div", "muted small", meta));
+    if (team.opponent_label) {
+      left.append(el("div", "muted small", `vs ${team.opponent_label} this week`));
+    }
+    head.append(left);
+
+    const score = el("div", "team-score");
+    score.append(el("b", null, fmt(points)));
+    score.append(el("span", null, "projected"));
+    head.append(score);
+    card.append(head);
+
+    const rows = declared && team.declared.length ? team.declared : team.starters;
+    const table = el("table", "lineup compact");
+    const body = el("tbody");
+    rows.forEach((player) => {
+      const tr = el("tr", "clickable");
+      tr.append(el("td", null, player.slot || ""));
+      const name = el("td");
+      name.append(posSpan(player.position || "?"));
+      name.append(document.createTextNode(` ${player.name}`));
+      if (player.p_play !== null && player.p_play < 0.9) {
+        name.append(el("span", "tag warn", `${Math.round(player.p_play * 100)}%`));
+      }
+      if (!player.opponent) name.append(el("span", "tag", "bye"));
+      tr.append(name);
+      tr.append(el("td", "muted small", player.opponent || ""));
+      tr.append(el("td", "num-col", fmt(player.projection)));
+      tr.addEventListener("click", () => openPlayer(player.sleeper_id));
+      body.append(tr);
+    });
+    table.append(body);
+    card.append(table);
+
+    if (team.points_left_on_bench > 0 && !declared) {
+      card.append(
+        el(
+          "p",
+          "muted small",
+          `Currently set to score ${fmt(team.declared_points)} — ` +
+            `${fmt(team.points_left_on_bench)} below what this roster could field.`
+        )
+      );
+    }
+    if (declared && !team.declared.length) {
+      card.append(el("p", "muted small", "No readable lineup set — showing best possible."));
+    }
+    (team.notes || []).forEach((note) => card.append(el("p", "muted small", note)));
+
+    const strengths = el("div", "strength-row");
+    Object.entries(team.position_strength).forEach(([position, value]) => {
+      const average = data.averages[`strength_${position}`];
+      const chip = el("span", "chip");
+      chip.append(posSpan(position));
+      chip.append(document.createTextNode(fmt(value, 0)));
+      if (average) {
+        const delta = value - average;
+        chip.append(
+          el("span", `delta ${delta >= 0 ? "pos" : "neg"}`, ` ${delta >= 0 ? "+" : ""}${fmt(delta, 0)}`)
+        );
+        chip.title = `League average ${fmt(average, 0)}`;
+      }
+      strengths.append(chip);
+    });
+    card.append(strengths);
+
+    if (showBench && team.bench.length) {
+      const benchTable = el("table", "lineup compact bench");
+      const benchBody = el("tbody");
+      team.bench.slice(0, 10).forEach((player) => {
+        const tr = el("tr", "clickable");
+        tr.append(el("td", "muted small", "BN"));
+        const name = el("td");
+        name.append(posSpan(player.position || "?"));
+        name.append(document.createTextNode(` ${player.name}`));
+        tr.append(name);
+        tr.append(el("td", "muted small", player.opponent || "bye"));
+        tr.append(el("td", "num-col", fmt(player.projection)));
+        tr.addEventListener("click", () => openPlayer(player.sleeper_id));
+        benchBody.append(tr);
+      });
+      benchTable.append(benchBody);
+      card.append(el("h3", null, "Bench"));
+      card.append(benchTable);
+    }
+
+    grid.append(card);
+  });
 }
 
 /* ------------------------------------------------------------------ board */

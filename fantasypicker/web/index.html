@@ -27,6 +27,7 @@
   <nav class="tabs" id="tabs" hidden>
     <button class="tab" data-view="draft">Draft</button>
     <button class="tab" data-view="matchup">Matchup</button>
+    <button class="tab" data-view="teams">League</button>
     <button class="tab" data-view="board">Board</button>
     <button class="tab" data-view="waivers">Waivers</button>
     <button class="tab" data-view="model">Model</button>
@@ -161,6 +162,23 @@
       <h3>Every player on your roster</h3>
       <div class="table-wrap"><table class="data" id="matchup-players"></table></div>
     </div>
+  </section>
+
+  <!-- League ----------------------------------------------------------- -->
+  <section id="view-teams" class="view">
+    <div class="toolbar">
+      <label>Week <input type="number" id="teams-week" min="1" max="18" style="width:4.5rem"></label>
+      <label>Lineup
+        <select id="teams-mode">
+          <option value="best">Best possible</option>
+          <option value="declared">As currently set</option>
+        </select>
+      </label>
+      <label class="toggle"><input type="checkbox" id="teams-bench"> Show benches</label>
+      <button id="teams-refresh" class="ghost">Refresh</button>
+    </div>
+    <div class="card" id="teams-summary"></div>
+    <div id="teams-grid" class="teams-grid"></div>
   </section>
 
   <!-- Board ------------------------------------------------------------ -->

@@ -624,3 +624,113 @@ def test_an_espn_team_logo_is_carried_as_the_avatar():
     teams, _ = build_teams(payload, crosswalk())
     assert teams[1].avatar_url == "https://g.espncdn.com/lm-static/logo.svg"
     assert teams[2].avatar_url is None
+
+
+# ------------------------------------------------------------- team pictures
+
+
+def _service_with_espn_league(credentials=None):
+    from fantasypicker.platforms import EspnSource
+    from fantasypicker.service import PickerService
+    from fantasypicker.sleeper.league import Team
+
+    service = PickerService()
+    service.platform = "espn"
+    service.source = EspnSource(2026, credentials)
+    league_teams = {
+        1: Team(
+            roster_id=1,
+            owner_id="u1",
+            display_name="alice",
+            team_name="Aces",
+            avatar="https://mystique-api.fantasy.espn.com/apis/v1/domains/lm/images/abc",
+        ),
+        2: Team(
+            roster_id=2,
+            owner_id="u2",
+            display_name="bob",
+            team_name="Bears",
+            avatar="https://g.espncdn.com/lm-static/logo-packs/core/bear.svg",
+        ),
+    }
+
+    class _League:
+        teams = league_teams
+
+    service.league = _League()
+    return service
+
+
+def test_authenticated_espn_logos_are_routed_through_the_app():
+    """A browser cannot attach ESPN cookies to an <img> on 127.0.0.1, so the
+    mystique-hosted custom logos 401 when linked directly. Those go through
+    the app; public logo-pack images stay direct."""
+    service = _service_with_espn_league()
+    assert service._avatar_link(service.league.teams[1]) == "/api/team-image/1"
+    assert service._avatar_link(service.league.teams[2]) == (
+        "https://g.espncdn.com/lm-static/logo-packs/core/bear.svg"
+    )
+
+
+def test_sleeper_avatars_are_never_proxied():
+    service = _service_with_espn_league()
+    service.platform = "sleeper"
+    assert "sleepercdn" in service._avatar_link(service.league.teams[1]) or (
+        service._avatar_link(service.league.teams[1]).startswith("https://")
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_image_proxy_sends_the_espn_cookies(monkeypatch):
+    """The whole point: the server attaches the credentials the browser cannot."""
+    import fantasypicker.service as service_module
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["cookie"] = request.headers.get("cookie", "")
+        return httpx.Response(200, content=b"PNGDATA", headers={"content-type": "image/png"})
+
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), cookies=kwargs.get("cookies"))
+
+    monkeypatch.setattr(service_module.httpx, "AsyncClient", factory)
+    creds = EspnCredentials(espn_s2="s2value", swid="ABC").normalised()
+    service = _service_with_espn_league(creds)
+
+    image = await service.team_image(1)
+    assert image == (b"PNGDATA", "image/png")
+    assert "espn_s2=s2value" in seen["cookie"]
+    assert "SWID=" in seen["cookie"]
+    # Second call is served from cache — no re-fetch, same answer.
+    seen.clear()
+    assert await service.team_image(1) == (b"PNGDATA", "image/png")
+    assert seen == {}
+
+
+@pytest.mark.asyncio
+async def test_the_image_proxy_refuses_to_relay_non_images(monkeypatch):
+    """A 200 that is secretly an HTML login page must not be served as a logo."""
+    import fantasypicker.service as service_module
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>log in</html>", headers={"content-type": "text/html"})
+
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(service_module.httpx, "AsyncClient", factory)
+    service = _service_with_espn_league()
+    assert await service.team_image(1) is None
+
+
+@pytest.mark.asyncio
+async def test_missing_teams_and_pictures_404_cleanly():
+    service = _service_with_espn_league()
+    assert await service.team_image(99) is None
+    service.league.teams[1].avatar = None
+    assert await service.team_image(1) is None

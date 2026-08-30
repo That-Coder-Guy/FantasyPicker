@@ -306,7 +306,10 @@ def _doctor_espn(
                 f"{team.record:<7} {len(team.players):>2} players "
                 f"· {team.manager}"
             )
-            print(f"      picture: {team.avatar_url or '(none in ESPN response)'}")
+            picture = team.avatar_url or "(none in ESPN response)"
+            if "fantasy.espn.com" in picture:
+                picture += "  (authenticated; the app proxies it with your cookies)"
+            print(f"      picture: {picture}")
         if not any(t.avatar_url for t in teams.values()):
             print(
                 "\nESPN returned no team logos for this league. The app shows "

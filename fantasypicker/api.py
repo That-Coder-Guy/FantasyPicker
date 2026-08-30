@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -267,6 +267,25 @@ async def teams(week: int | None = None) -> dict[str, Any]:
 @app.get("/api/waivers")
 async def waivers(week: int | None = None, roster_id: int | None = None) -> dict[str, Any]:
     return await service.waivers(week, roster_id=roster_id)
+
+
+@app.get("/api/team-image/{roster_id}")
+async def team_image(roster_id: int) -> Response:
+    """A team's picture, fetched with the user's own ESPN credentials.
+
+    Custom ESPN logos are served from an authenticated endpoint that a browser
+    cannot load directly from this app's page — cross-site cookie rules strip
+    the ESPN session from an <img> request, so ESPN answers 401. The server
+    holds the cookies, so it fetches on the browser's behalf.
+    """
+    image = await service.team_image(roster_id)
+    if image is None:
+        raise HTTPException(status_code=404, detail="No picture for this team.")
+    content, content_type = image
+    # Cacheable, unlike the app shell: a logo change is cosmetic and rare.
+    return Response(
+        content, media_type=content_type, headers={"Cache-Control": "max-age=3600"}
+    )
 
 
 @app.get("/api/trades")

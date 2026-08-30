@@ -222,3 +222,20 @@ def test_the_app_shell_is_never_served_stale(client):
         assert response.headers.get("cache-control") == "no-cache", path
     # API responses are untouched by the middleware.
     assert http.get("/api/status").headers.get("cache-control") != "no-cache"
+
+
+def test_the_team_image_route_serves_bytes_with_caching(client, monkeypatch):
+    from fantasypicker.service import PickerService
+
+    async def fake_image(self, roster_id):
+        return (b"PNGDATA", "image/png") if int(roster_id) == 1 else None
+
+    monkeypatch.setattr(PickerService, "team_image", fake_image)
+    http, _ = client
+    response = http.get("/api/team-image/1")
+    assert response.status_code == 200
+    assert response.content == b"PNGDATA"
+    assert response.headers["content-type"].startswith("image/png")
+    # Unlike the app shell, pictures are allowed to cache.
+    assert "max-age" in response.headers.get("cache-control", "")
+    assert http.get("/api/team-image/2").status_code == 404

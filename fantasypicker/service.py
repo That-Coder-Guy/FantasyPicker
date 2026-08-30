@@ -19,9 +19,11 @@ import asyncio
 import logging
 import re
 import time
+from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import pandas as pd
 
 from .cache import FetchError
@@ -112,6 +114,10 @@ class PickerService:
     correlations: CorrelationModel | None = None
     season_projections: ProjectionSet | None = None
     weekly_projections: dict[int, ProjectionSet] = field(default_factory=dict)
+
+    #: Proxied team pictures, url -> (bytes, content_type). A league has at
+    #: most a couple dozen small images; process-lifetime caching is plenty.
+    _avatar_cache: dict[str, tuple[bytes, str]] = field(default_factory=dict)
 
     status: LoadStatus = field(default_factory=LoadStatus)
     #: Remembered leagues; read from disk on first access, not at import, so
@@ -404,7 +410,7 @@ class PickerService:
                     "roster_id": t.roster_id,
                     "label": t.label,
                     "owner": t.manager,
-                    "avatar": t.avatar_url,
+                    "avatar": self._avatar_link(t),
                     "record": t.record,
                     "points_for": round(t.points_for, 2),
                     "is_me": t.roster_id == league.my_roster_id,
@@ -418,6 +424,76 @@ class PickerService:
             return
         self.league.my_roster_id = int(roster_id)
         self._remember()
+
+    # -- team pictures ------------------------------------------------------- #
+
+    def _avatar_link(self, team) -> str | None:
+        """The URL the browser should load a team's picture from.
+
+        Custom ESPN team logos live on ``mystique-api.fantasy.espn.com``, which
+        demands the user's ESPN credentials — and a browser will not attach
+        espn.com cookies to an image loaded by a page on 127.0.0.1, so a direct
+        link 401s. Those are routed through :meth:`team_image`, where the
+        stored cookies can be attached server-side. Everything else (Sleeper's
+        CDN, ESPN's public logo packs, arbitrary custom URLs) loads faster
+        fetched directly.
+        """
+        url = team.avatar_url
+        if not url:
+            return None
+        host = (urlparse(url).hostname or "").lower()
+        if self.platform == "espn" and (
+            host == "fantasy.espn.com" or host.endswith(".fantasy.espn.com")
+        ):
+            return f"/api/team-image/{team.roster_id}"
+        return url
+
+    async def team_image(self, roster_id: int) -> tuple[bytes, str] | None:
+        """Fetch a team's picture with the user's ESPN credentials attached.
+
+        The bytes go to the user's own browser and nowhere else; the cookies go
+        to ESPN and nowhere else — the same place they already go for rosters.
+        """
+        league = self.league
+        if league is None:
+            return None
+        team = league.teams.get(int(roster_id))
+        if team is None or not team.avatar_url:
+            return None
+        url = team.avatar_url
+        cached = self._avatar_cache.get(url)
+        if cached is not None:
+            return cached
+
+        cookies: dict[str, str] = {}
+        host = (urlparse(url).hostname or "").lower()
+        if host == "fantasy.espn.com" or host.endswith(".fantasy.espn.com"):
+            source = self.source
+            credentials = getattr(source, "credentials", None)
+            if credentials is not None:
+                cookies = {"espn_s2": credentials.espn_s2, "SWID": credentials.swid}
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=15.0, cookies=cookies, follow_redirects=True
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning("team picture for roster %s failed: %s", roster_id, exc)
+            return None
+
+        content_type = str(response.headers.get("content-type") or "")
+        if not content_type.startswith("image/"):
+            log.warning(
+                "team picture for roster %s is %s, not an image; ignoring",
+                roster_id,
+                content_type or "untyped",
+            )
+            return None
+        result = (response.content, content_type)
+        self._avatar_cache[url] = result
+        return result
 
     # -- memory ------------------------------------------------------------- #
 
@@ -885,12 +961,12 @@ class PickerService:
         for trade in payload["trades"]:
             for side in (trade["me"], trade["them"]):
                 team = league.teams.get(int(side["roster_id"]))
-                side["avatar"] = team.avatar_url if team else None
+                side["avatar"] = self._avatar_link(team) if team else None
         for chain in payload["chains"]:
             for step in chain["steps"]:
                 for side in (step["me"], step["them"]):
                     team = league.teams.get(int(side["roster_id"]))
-                    side["avatar"] = team.avatar_url if team else None
+                    side["avatar"] = self._avatar_link(team) if team else None
         payload["my_roster_id"] = int(roster_id)
         payload["my_team"] = league.teams[int(roster_id)].label if int(roster_id) in league.teams else None
         return payload
@@ -924,11 +1000,15 @@ class PickerService:
                 draft_order=draft_order,
             )
         )
+        team_rows = [v.as_dict() for v in views]
+        for row in team_rows:
+            team = league.teams.get(int(row["roster_id"]))
+            row["avatar"] = self._avatar_link(team) if team else None
         return {
             "week": week,
             "my_roster_id": league.my_roster_id,
             "slots": [s.name for s in league.slots],
-            "teams": [v.as_dict() for v in views],
+            "teams": team_rows,
             "averages": {
                 k: round(v, 1) for k, v in league_view.league_averages(views).items()
             },

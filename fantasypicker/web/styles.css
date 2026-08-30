@@ -245,11 +245,6 @@ table th.num-col { font-family: inherit; }
 .team-card.mine { border-color: var(--accent); }
 .team-head { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; margin-bottom: .6rem; }
 .team-name { font-weight: 600; display: flex; align-items: center; gap: .4rem; }
-.team-rank {
-  display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 99px;
-  font: 600 .74rem var(--mono); color: var(--muted);
-}
 .team-score { text-align: right; }
 .team-score b { display: block; font: 700 1.3rem/1 var(--mono); }
 .team-score span { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }

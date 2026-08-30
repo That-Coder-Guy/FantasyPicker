@@ -806,14 +806,13 @@ function renderTeams() {
     )
   );
 
-  teams.forEach((team, index) => {
+  teams.forEach((team) => {
     const points = declared ? team.declared_points : team.projected_points;
     const card = el("div", `card team-card${team.is_me ? " mine" : ""}`);
 
     const head = el("div", "team-head");
     const left = el("div");
     const title = el("div", "team-name");
-    title.append(el("span", "team-rank", `${index + 1}`));
     title.append(teamAvatar(team.avatar, team.label, "lg"));
     title.append(document.createTextNode(team.label));
     if (team.is_me) title.append(el("span", "tag", "you"));

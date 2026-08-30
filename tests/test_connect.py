@@ -340,3 +340,38 @@ async def test_refresh_keeps_names_when_sleeper_returns_no_users():
 
     assert league.teams[1].label == "Alice's Aces"
     assert league.teams[2].label == "bob"
+
+
+# -------------------------------------------------------------- team pictures
+
+
+def test_a_sleeper_avatar_id_becomes_a_cdn_url():
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice", "avatar": "abc123"}],
+    )
+    assert teams[1].avatar_url == "https://sleepercdn.com/avatars/thumbs/abc123"
+
+
+def test_a_custom_team_avatar_url_wins_over_the_account_picture():
+    """Sleeper stores a per-league team picture as a full URL in metadata."""
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [
+            {
+                "user_id": "u1",
+                "display_name": "alice",
+                "avatar": "abc123",
+                "metadata": {"avatar": "https://sleepercdn.com/uploads/custom.jpg"},
+            }
+        ],
+    )
+    assert teams[1].avatar_url == "https://sleepercdn.com/uploads/custom.jpg"
+
+
+def test_no_avatar_means_no_url_rather_than_a_broken_image():
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice"}],
+    )
+    assert teams[1].avatar_url is None

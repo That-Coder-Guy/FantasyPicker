@@ -404,6 +404,7 @@ class PickerService:
                     "roster_id": t.roster_id,
                     "label": t.label,
                     "owner": t.manager,
+                    "avatar": t.avatar_url,
                     "record": t.record,
                     "points_for": round(t.points_for, 2),
                     "is_me": t.roster_id == league.my_roster_id,
@@ -880,6 +881,16 @@ class PickerService:
                     "ros_points": 0.0,
                 }
         payload["players"] = players
+        # Team pictures for the cards; the engine deals in ids and labels only.
+        for trade in payload["trades"]:
+            for side in (trade["me"], trade["them"]):
+                team = league.teams.get(int(side["roster_id"]))
+                side["avatar"] = team.avatar_url if team else None
+        for chain in payload["chains"]:
+            for step in chain["steps"]:
+                for side in (step["me"], step["them"]):
+                    team = league.teams.get(int(side["roster_id"]))
+                    side["avatar"] = team.avatar_url if team else None
         payload["my_roster_id"] = int(roster_id)
         payload["my_team"] = league.teams[int(roster_id)].label if int(roster_id) in league.teams else None
         return payload

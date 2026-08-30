@@ -315,3 +315,22 @@ table th.num-col { font-family: inherit; }
 .trade-chain:first-child { border-top: none; margin-top: 0; padding-top: 0; }
 .trade-chain-step { margin-left: .6rem; }
 .chain-step-label { font-size: .75rem; text-transform: uppercase; margin: .4rem 0 .2rem; }
+
+/* Team avatars ------------------------------------------------------------ */
+.team-avatar {
+  width: 24px; height: 24px; border-radius: 50%; overflow: hidden;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-2); border: 1px solid var(--line);
+  flex: none; vertical-align: middle;
+}
+.team-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.team-avatar.fallback {
+  font-size: .62rem; font-weight: 700; color: var(--muted); letter-spacing: .02em;
+}
+.team-avatar.lg { width: 30px; height: 30px; }
+.team-avatar.lg.fallback { font-size: .72rem; }
+.team-name .team-avatar { margin-right: .45rem; }
+.team-btn.with-avatar { display: flex; align-items: center; gap: .6rem; }
+.team-btn.with-avatar .team-btn-text { min-width: 0; }
+.team-btn.with-avatar strong, .team-btn.with-avatar small { display: block; }
+.trade-with { display: inline-flex; align-items: center; gap: .5rem; }

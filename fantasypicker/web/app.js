@@ -32,6 +32,35 @@ const pct = (value, digits = 1) =>
  * label above right-aligned numbers reads as two different columns. Mark
  * numeric columns with num("...") and the header inherits the alignment. */
 const num = (label) => ({ label, num: true });
+
+/* A team's picture, with the fallback most teams need: plenty of managers
+ * never set one, and a CDN image can 404 after an avatar change. Either way
+ * the circle shows the team's initials instead of a broken-image icon. */
+function teamAvatar(url, label, size) {
+  const wrap = el("span", `team-avatar${size === "lg" ? " lg" : ""}`);
+  const initials = (label || "?")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  const fallback = () => {
+    wrap.textContent = initials;
+    wrap.classList.add("fallback");
+  };
+  if (url) {
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.loading = "lazy";
+    img.addEventListener("error", fallback);
+    wrap.append(img);
+  } else {
+    fallback();
+  }
+  return wrap;
+}
 const tableHead = (labels) => {
   const head = el("thead");
   const row = el("tr");
@@ -410,9 +439,12 @@ function applyLeague(league) {
     const list = $("team-list");
     list.innerHTML = "";
     league.teams_list.forEach((team) => {
-      const button = el("button", "team-btn");
-      button.append(el("strong", null, team.label));
-      button.append(el("small", null, `${team.owner} · ${team.record}`));
+      const button = el("button", "team-btn with-avatar");
+      button.append(teamAvatar(team.avatar, team.label));
+      const text = el("span", "team-btn-text");
+      text.append(el("strong", null, team.label));
+      text.append(el("small", null, `${team.owner} · ${team.record}`));
+      button.append(text);
       button.addEventListener("click", async () => {
         const data = await api("/api/team", {
           method: "POST",
@@ -774,6 +806,7 @@ function renderTeams() {
     const left = el("div");
     const title = el("div", "team-name");
     title.append(el("span", "team-rank", `${index + 1}`));
+    title.append(teamAvatar(team.avatar, team.label, "lg"));
     title.append(document.createTextNode(team.label));
     if (team.is_me) title.append(el("span", "tag", "you"));
     left.append(title);
@@ -1063,7 +1096,10 @@ function tradeSideBlock(players, side, heading) {
 function tradeCard(players, trade) {
   const card = el("div", "trade-card");
   const header = el("div", "trade-header");
-  header.append(el("strong", null, `Trade with ${trade.them.label}`));
+  const who = el("span", "trade-with");
+  who.append(teamAvatar(trade.them.avatar, trade.them.label));
+  who.append(el("strong", null, `Trade with ${trade.them.label}`));
+  header.append(who);
   const badge = el("span", `badge trade-${trade.likelihood.replace(/\s+/g, "-")}`);
   badge.textContent = trade.likelihood;
   header.append(badge);

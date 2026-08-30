@@ -616,3 +616,11 @@ async def test_the_weekly_matchup_resolves_the_opponent_without_manual_entry(
     assert pairing is not None
     assert pairing.away.label == "Old Style"
     assert pairing.home_starters == ["4034"]
+
+
+def test_an_espn_team_logo_is_carried_as_the_avatar():
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["logo"] = "https://g.espncdn.com/lm-static/logo.svg"
+    teams, _ = build_teams(payload, crosswalk())
+    assert teams[1].avatar_url == "https://g.espncdn.com/lm-static/logo.svg"
+    assert teams[2].avatar_url is None

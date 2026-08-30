@@ -97,6 +97,9 @@ class Team:
     losses: int = 0
     ties: int = 0
     points_for: float = 0.0
+    #: Either a bare Sleeper avatar id or a full image URL (custom Sleeper
+    #: team avatars and ESPN logos arrive as URLs). :attr:`avatar_url`
+    #: resolves the difference.
     avatar: str | None = None
     claimed: bool = True
 
@@ -133,6 +136,19 @@ class Team:
         if self.display_name or self.username:
             return self.display_name or self.username
         return "nobody has joined yet" if not self.players else "unclaimed"
+
+    @property
+    def avatar_url(self) -> str | None:
+        """A fetchable image URL for the team's picture, if it has one."""
+        if not self.avatar:
+            return None
+        value = str(self.avatar).strip()
+        if value.startswith(("http://", "https://")):
+            return value
+        from ..config import SLEEPER_CDN
+
+        # A bare value is a Sleeper avatar id; thumbs are plenty at card size.
+        return f"{SLEEPER_CDN}/avatars/thumbs/{value}"
 
     @property
     def record(self) -> str:
@@ -369,7 +385,11 @@ def build_teams(
             ties=int(settings.get("ties") or 0),
             points_for=float(settings.get("fpts") or 0)
             + float(settings.get("fpts_decimal") or 0) / 100.0,
-            avatar=user.get("avatar") or (prior.avatar if prior else None),
+            # A custom team avatar set for this league (a full URL in the
+            # user's metadata) beats the account picture (a bare avatar id).
+            avatar=metadata.get("avatar")
+            or user.get("avatar")
+            or (prior.avatar if prior else None),
             claimed=bool(user),
         )
         if not user and teams[roster_id].players:

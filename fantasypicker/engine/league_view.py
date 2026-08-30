@@ -40,6 +40,7 @@ class TeamView:
     roster_id: int
     label: str
     owner: str
+    avatar: str | None
     record: str
     points_for: float
     is_me: bool
@@ -63,6 +64,7 @@ class TeamView:
             "roster_id": self.roster_id,
             "label": self.label,
             "owner": self.owner,
+            "avatar": self.avatar,
             "record": self.record,
             "points_for": round(self.points_for, 1),
             "is_me": self.is_me,
@@ -241,6 +243,7 @@ def _build_team_view(
             roster_id=team.roster_id,
             label=team.label,
             owner=team.manager,
+            avatar=team.avatar_url,
             record=team.record,
             points_for=team.points_for,
             is_me=team.roster_id == league.my_roster_id,
@@ -311,6 +314,7 @@ def _build_team_view(
         roster_id=team.roster_id,
         label=team.label,
         owner=team.manager,
+        avatar=team.avatar_url,
         record=team.record,
         points_for=team.points_for,
         is_me=team.roster_id == league.my_roster_id,

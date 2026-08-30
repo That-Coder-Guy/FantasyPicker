@@ -185,6 +185,7 @@ def build_teams(
             losses=int(record.get("losses") or 0),
             ties=int(record.get("ties") or 0),
             points_for=float(record.get("pointsFor") or 0.0),
+            avatar=str(row.get("logo") or "") or (prior.avatar if prior else None),
             claimed=bool(member) or bool(team_name),
         )
     return teams, unresolved

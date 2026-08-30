@@ -302,6 +302,23 @@ if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
+@app.middleware("http")
+async def _no_stale_app_shell(request, call_next):
+    """Make UI updates arrive on a plain reload.
+
+    Without a Cache-Control header, browsers fall back to heuristic caching
+    keyed on Last-Modified — a file untouched for weeks can be served from
+    local cache for hours without the server ever being asked. For a local app
+    that means a `git pull` visibly does nothing until a hard refresh, which
+    reads exactly like the fix not working. `no-cache` still allows ETag
+    revalidation, so unchanged files remain cheap 304s.
+    """
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")

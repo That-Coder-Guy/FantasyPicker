@@ -208,6 +208,10 @@ table tbody tr.clickable:hover { background: var(--panel-2); }
 /* A numeric column's header right-aligns with its cells but keeps header
    type — the mono digits belong to the data, not the label. */
 table th.num-col { font-family: inherit; }
+/* Column dividers on data tables. Left-aligned text columns and right-aligned
+   number columns leave a gap in the middle of every wide column; the divider
+   ties each header to its own column so the gap cannot read as misalignment. */
+.data th + th, .data td + td { border-left: 1px solid var(--line); }
 /* Wide tables scroll inside their own container rather than making the page
    scroll sideways. The wrapper does the scrolling so the table keeps normal
    table layout and still fills the card. */

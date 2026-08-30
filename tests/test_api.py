@@ -206,3 +206,19 @@ def test_espn_cookies_are_never_echoed_back(espn_client):
     )
     assert response.status_code == 200
     assert "super-secret-value" not in response.text
+
+
+def test_the_app_shell_is_never_served_stale(client):
+    """UI fixes must arrive on a plain reload.
+
+    With no Cache-Control header, browsers heuristically cache static files
+    and can keep showing week-old JS after a git pull — which reads exactly
+    like the fix not working.
+    """
+    http, _ = client
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        response = http.get(path)
+        assert response.status_code == 200, path
+        assert response.headers.get("cache-control") == "no-cache", path
+    # API responses are untouched by the middleware.
+    assert http.get("/api/status").headers.get("cache-control") != "no-cache"

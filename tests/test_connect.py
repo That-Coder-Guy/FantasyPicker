@@ -167,3 +167,95 @@ def test_availability_on_an_empty_projection_set_is_a_no_op():
 
     empty = ProjectionSet(pd.DataFrame(), QUANTILES, season=2026, week=1)
     assert apply_availability(empty, AvailabilityModel(), {}) is False
+
+
+# ------------------------------------------------------------------ team names
+
+
+def test_team_names_come_from_the_user_object():
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice", "metadata": {"team_name": "Aces"}}],
+    )
+    assert teams[1].team_name == "Aces"
+    assert teams[1].label == "Aces"
+
+
+def test_a_manager_with_no_custom_name_falls_back_to_their_username():
+    """Most Sleeper managers never set a team name; Sleeper shows the username."""
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice", "metadata": {}}],
+    )
+    assert teams[1].team_name == ""
+    assert teams[1].label == "alice"
+
+
+def test_an_empty_users_response_does_not_wipe_known_names():
+    """The bug: rosters arriving without users renamed every team to 'Team N'.
+
+    refresh runs before every request, so one partial response would blank the
+    names across the whole UI until the next good one.
+    """
+    users = [{"user_id": "u1", "display_name": "alice", "metadata": {"team_name": "Aces"}}]
+    rosters = [{"roster_id": 1, "owner_id": "u1", "players": ["1"]}]
+    first = build_teams(rosters, users)
+    assert first[1].label == "Aces"
+
+    # Same rosters, users response came back empty.
+    second = build_teams(rosters, [], previous=first)
+    assert second[1].label == "Aces"
+    assert second[1].display_name == "alice"
+
+
+def test_a_fresh_name_still_overrides_the_remembered_one():
+    """Carrying names forward must not freeze a rename out."""
+    old = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice", "metadata": {"team_name": "Aces"}}],
+    )
+    new = build_teams(
+        [{"roster_id": 1, "owner_id": "u1"}],
+        [{"user_id": "u1", "display_name": "alice", "metadata": {"team_name": "Renamed"}}],
+        previous=old,
+    )
+    assert new[1].label == "Renamed"
+
+
+def test_an_orphaned_team_is_named_after_a_co_owner():
+    """Sleeper allows a roster with no owner — common once someone quits."""
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": None, "co_owners": ["u2"]}],
+        [{"user_id": "u2", "display_name": "bob", "metadata": {"team_name": "Bob's Team"}}],
+    )
+    assert teams[1].label == "Bob's Team"
+
+
+def test_a_truly_ownerless_team_still_gets_a_stable_label():
+    teams = build_teams([{"roster_id": 4, "owner_id": None}], [])
+    assert teams[4].label == "Team 4"
+
+
+def test_users_without_an_id_are_ignored_rather_than_matching_a_null_owner():
+    """A malformed user row must not become the name of every orphan team."""
+    teams = build_teams(
+        [{"roster_id": 1, "owner_id": None}],
+        [{"display_name": "ghost", "metadata": {"team_name": "Should Not Appear"}}],
+    )
+    assert teams[1].label == "Team 1"
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_names_when_sleeper_returns_no_users():
+    """End to end: a partial refresh must not blank the league."""
+    routes = {"/v1/league/999/rosters": ROSTERS, "/v1/league/999/users": USERS}
+    client = SleeperClient(httpx.AsyncClient(transport=stub_transport(routes)))
+    league = await load_league(client, "999", username="alice")
+    assert league.teams[1].label == "Alice's Aces"
+
+    routes["/v1/league/999/users"] = []
+    client2 = SleeperClient(httpx.AsyncClient(transport=stub_transport(routes)))
+    await refresh_teams(client2, league, fresh=True)
+
+    assert league.teams[1].label == "Alice's Aces"
+    assert league.teams[2].label == "bob"

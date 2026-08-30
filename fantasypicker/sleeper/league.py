@@ -9,10 +9,13 @@ what removes the need to type an opponent's roster in by hand.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from .client import SleeperClient
 from .scoring import ScoringRules
+
+log = logging.getLogger(__name__)
 
 
 class LeagueNotFound(ValueError):
@@ -275,21 +278,51 @@ def _parse_slots(roster_positions: list[str] | None) -> tuple[list[RosterSlot], 
     return slots, bench
 
 
-def build_teams(rosters: list[dict], users: list[dict]) -> dict[int, Team]:
-    """Turn Sleeper's roster and user lists into :class:`Team` objects."""
-    users_by_id = {u.get("user_id"): u for u in users}
+def build_teams(
+    rosters: list[dict],
+    users: list[dict],
+    *,
+    previous: dict[int, Team] | None = None,
+) -> dict[int, Team]:
+    """Turn Sleeper's roster and user lists into :class:`Team` objects.
+
+    Identity — the team name, the owner's display name, the avatar — lives on
+    the *user* object, not the roster. So a rosters response that arrives
+    without a matching users response would otherwise rename every team in the
+    league to "Team 4". ``previous`` carries the last known identity forward,
+    because a stale name is enormously better than a wrong one.
+
+    Sleeper also allows a roster with no ``owner_id`` at all — an orphaned team
+    the commissioner is running, which most active leagues acquire eventually.
+    Those fall back to the first co-owner before giving up on a name.
+    """
+    users_by_id = {u.get("user_id"): u for u in users if u.get("user_id")}
+    known = previous or {}
     teams: dict[int, Team] = {}
     for row in rosters:
         roster_id = int(row.get("roster_id"))
         owner_id = row.get("owner_id")
-        user = users_by_id.get(owner_id, {})
+        user = users_by_id.get(owner_id) or {}
+        if not user:
+            # An abandoned team still has co-owners we can name it after.
+            for co_owner in row.get("co_owners") or []:
+                if co_owner in users_by_id:
+                    user = users_by_id[co_owner]
+                    break
         metadata = user.get("metadata") or {}
+        prior = known.get(roster_id)
         settings = row.get("settings") or {}
         teams[roster_id] = Team(
             roster_id=roster_id,
             owner_id=owner_id,
-            display_name=user.get("display_name") or f"Team {roster_id}",
-            team_name=metadata.get("team_name") or "",
+            display_name=(
+                user.get("display_name")
+                or (prior.display_name if prior else "")
+                or f"Team {roster_id}"
+            ),
+            team_name=(
+                metadata.get("team_name") or (prior.team_name if prior else "")
+            ),
             players=[p for p in (row.get("players") or []) if p],
             starters=[p for p in (row.get("starters") or []) if p and p != "0"],
             reserve=[p for p in (row.get("reserve") or []) if p],
@@ -299,7 +332,7 @@ def build_teams(rosters: list[dict], users: list[dict]) -> dict[int, Team]:
             ties=int(settings.get("ties") or 0),
             points_for=float(settings.get("fpts") or 0)
             + float(settings.get("fpts_decimal") or 0) / 100.0,
-            avatar=user.get("avatar"),
+            avatar=user.get("avatar") or (prior.avatar if prior else None),
         )
     return teams
 
@@ -321,8 +354,18 @@ async def refresh_teams(
     )
     if not rosters:
         return False
+    if not users:
+        # Rosters without users is a partial answer, not a league where nobody
+        # has a name. Rebuilding from it would rename every team to "Team 4"
+        # until the next successful refresh — and refresh runs before every
+        # request, so one bad response would poison the whole UI.
+        log.warning(
+            "Sleeper returned rosters but no users for league %s; "
+            "keeping the team names already loaded",
+            league.league_id,
+        )
     before = {rid: tuple(sorted(t.players)) for rid, t in league.teams.items()}
-    league.teams = build_teams(rosters, users or [])
+    league.teams = build_teams(rosters, users or [], previous=league.teams)
     league._matchup_cache.clear()
     after = {rid: tuple(sorted(t.players)) for rid, t in league.teams.items()}
     return before != after

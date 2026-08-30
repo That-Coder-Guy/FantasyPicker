@@ -439,7 +439,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 151 tests, no network access required
+pytest                          # 159 tests, no network access required
 fantasypicker serve --reload
 ```
 

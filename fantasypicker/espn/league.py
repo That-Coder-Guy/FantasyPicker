@@ -364,6 +364,19 @@ def _synthetic_raw(payload: dict, slots: list[RosterSlot], bench: int) -> dict:
     }
 
 
+def has_drafted(payload: dict | None) -> bool | None:
+    """Has this league drafted? None when ESPN did not say.
+
+    Before the draft every ESPN roster is genuinely empty — the same is true
+    on espn.com — so an empty league is only worth investigating once this is
+    True.
+    """
+    detail = (payload or {}).get("draftDetail")
+    if not isinstance(detail, dict) or "drafted" not in detail:
+        return None
+    return bool(detail.get("drafted"))
+
+
 def current_week(payload: dict | None) -> int:
     status = (payload or {}).get("status") or {}
     for key in ("currentMatchupPeriod", "latestScoringPeriod", "finalScoringPeriod"):
@@ -397,7 +410,9 @@ async def load_league(
     scoring = scoring_from_espn(settings.get("scoringSettings"))
 
     rosters = await client.rosters(league_id, season, week)
-    if not any(raw_entry_counts(rosters).values()):
+    if has_drafted(payload) is not False and not any(
+        raw_entry_counts(rosters).values()
+    ):
         # ESPN's roster view can answer with bare teams when asked without a
         # scoring period. Retrying with the league's current week costs one
         # cached call and is the difference between full rosters and an app
@@ -457,6 +472,7 @@ __all__ = [
     "build_teams",
     "current_week",
     "find_my_roster_id",
+    "has_drafted",
     "injury_map",
     "load_league",
     "matchup_rows",

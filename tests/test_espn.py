@@ -913,3 +913,65 @@ async def test_load_retries_with_the_week_when_rosters_come_back_bare():
     # Two entries came back on the retry; the ids themselves come from the
     # real crosswalk, so only the count is this test's business.
     assert len(league.teams[1].players) == 2
+
+
+# ------------------------------------------------------------ before the draft
+
+
+def test_draft_status_is_read_when_espn_reports_it():
+    from fantasypicker.espn.league import has_drafted
+
+    assert has_drafted({"draftDetail": {"drafted": True}}) is True
+    assert has_drafted({"draftDetail": {"drafted": False}}) is False
+    # Unknown is its own answer: never claim a league has drafted on a guess.
+    assert has_drafted({}) is None
+    assert has_drafted({"draftDetail": {}}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_league_that_has_not_drafted_is_not_retried_for_rosters():
+    """Empty rosters before the draft are correct, not a failure to load.
+
+    Retrying every load through the whole preseason would double the request
+    count to prove something ESPN already told us.
+    """
+    predraft = json.loads(json.dumps(LEAGUE))
+    predraft["draftDetail"] = {"drafted": False}
+    for row in predraft["teams"]:
+        row["roster"] = {"entries": []}
+    asked: list = []
+
+    class _Client:
+        async def league(self, league_id, season, *, fresh=False):
+            return predraft
+
+        async def rosters(self, league_id, season, week=None, *, fresh=False):
+            asked.append(week)
+            return predraft
+
+    league, unresolved = await load_league(_Client(), "999", 2026)
+    assert asked == [None]  # asked once, believed the answer
+    assert all(not t.players for t in league.teams.values())
+    assert unresolved == []
+
+
+@pytest.mark.asyncio
+async def test_a_drafted_league_with_empty_rosters_is_still_retried():
+    drafted = json.loads(json.dumps(LEAGUE))
+    drafted["draftDetail"] = {"drafted": True}
+    bare = json.loads(json.dumps(drafted))
+    for row in bare["teams"]:
+        row["roster"] = {"entries": []}
+    asked: list = []
+
+    class _Client:
+        async def league(self, league_id, season, *, fresh=False):
+            return drafted
+
+        async def rosters(self, league_id, season, week=None, *, fresh=False):
+            asked.append(week)
+            return bare if week is None else drafted
+
+    league, _ = await load_league(_Client(), "999", 2026)
+    assert asked == [None, 3]
+    assert len(league.teams[1].players) == 2

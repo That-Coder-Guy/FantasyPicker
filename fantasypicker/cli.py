@@ -233,7 +233,7 @@ def _doctor_espn(
     from .data.crosswalk import load_crosswalk
     from .data.nflverse import current_nfl_season
     from .espn.client import EspnAuthRequired, EspnClient, EspnLeagueNotFound
-    from .espn.league import build_teams, parse_slots, raw_entry_counts
+    from .espn.league import build_teams, has_drafted, parse_slots, raw_entry_counts
     from .espn.scoring import describe_items, scoring_from_espn
 
     year = int(season or current_nfl_season())
@@ -273,6 +273,10 @@ def _doctor_espn(
                 else "none stored — fine for a public league"
             )
         )
+
+        drafted = has_drafted(payload)
+        if drafted is not None:
+            print(f"  draft: {'complete' if drafted else 'not yet drafted'}")
 
         slots, bench = parse_slots(settings.get("rosterSettings"))
         print(f"\nstarting lineup: {', '.join(s.name for s in slots)}  (+{bench} bench)")
@@ -334,11 +338,19 @@ def _doctor_espn(
                 file=sys.stderr,
             )
         elif not total_sent:
-            print(
-                "\nESPN sent no roster entries at all. Either the league has not "
-                "drafted, or the roster view was refused for these teams.",
-                file=sys.stderr,
-            )
+            drafted = has_drafted(payload)
+            if drafted is False:
+                print(
+                    "\nThis league has not drafted yet, so every roster is empty "
+                    "— espn.com shows the same thing. Nothing is wrong; rosters "
+                    "appear here as soon as the draft runs."
+                )
+            else:
+                print(
+                    "\nESPN sent no roster entries at all, and reports the draft "
+                    "as complete. That is worth investigating.",
+                    file=sys.stderr,
+                )
         if unresolved:
             print(
                 f"\n{len(unresolved)} rostered players could not be matched to a "

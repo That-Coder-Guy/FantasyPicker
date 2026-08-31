@@ -172,11 +172,17 @@ class EspnClient:
     async def league(
         self, league_id: str, season: int, *, fresh: bool = False
     ) -> dict | None:
-        """Settings, roster slots, scoring, and the member list."""
+        """Settings, roster slots, scoring, the member list, and draft status.
+
+        ``mDraftDetail`` rides along because whether the league has drafted
+        changes how an empty roster should be read: before the draft every
+        team legitimately has nobody, and that is worth saying rather than
+        leaving it to look like a failure to load.
+        """
         return await self._get(
             league_id,
             season,
-            ("mSettings", "mTeam"),
+            ("mSettings", "mTeam", "mDraftDetail"),
             self._settings.ttl_league,
             fresh=fresh,
         )

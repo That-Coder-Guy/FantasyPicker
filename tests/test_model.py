@@ -340,3 +340,145 @@ def test_a_populated_projection_set_is_not_reported_empty():
     assert populated.is_empty is False
     assert populated.by_id("a") is not None
     assert populated.by_id("missing") is None
+
+
+# ------------------------------------------------------- who gets projected
+
+# A player's rolling form features carry his last real games forward for ever,
+# so a retired quarterback draws a perfectly credible projection unless he is
+# kept out of the panel. The symptom is him turning up on the waiver and drops
+# pages as someone worth adding.
+
+
+def _retirement_fixture(monkeypatch, *, active_players):
+    import fantasypicker.model.dataset as ds
+
+    schedule = pd.DataFrame(
+        [
+            {"season": 2025, "week": 1, "team": "PIT", "opponent_team": "CLE",
+             "team_score": 20.0},
+            {"season": 2026, "week": 1, "team": "PIT", "opponent_team": "CLE",
+             "team_score": np.nan},
+            {"season": 2026, "week": 2, "team": "PIT", "opponent_team": "BAL",
+             "team_score": np.nan},
+        ]
+    )
+    monkeypatch.setattr(ds, "team_schedule", lambda seasons: schedule)
+    monkeypatch.setattr(ds, "_depth_chart_rank", lambda seasons: pd.DataFrame())
+
+    history = pd.DataFrame(
+        [
+            {"gsis_id": "00-RETIRED", "player_display_name": "Retired Veteran",
+             "position": "QB", "team": "PIT", "season": 2021, "week": 1,
+             "played": 1, "fantasy_points": 22.0},
+            {"gsis_id": "00-CURRENT", "player_display_name": "Current Starter",
+             "position": "QB", "team": "PIT", "season": 2025, "week": 1,
+             "played": 1, "fantasy_points": 19.0},
+        ]
+    )
+    rows = ds._future_rows(
+        (2021, 2025, 2026), history, None, None, active_players
+    )
+    return set(rows["player_display_name"]) if not rows.empty else set()
+
+
+def test_a_retired_player_gets_no_future_rows(monkeypatch):
+    """He has not taken a snap in five seasons. He is not a free agent target."""
+    names = _retirement_fixture(monkeypatch, active_players=None)
+    assert "Retired Veteran" not in names
+    assert "Current Starter" in names
+
+
+def test_recency_still_applies_when_a_roster_list_says_otherwise(monkeypatch):
+    """The guard that does not depend on anyone else's metadata.
+
+    Sleeper's player file keeps every player it has ever known, and a retired
+    one can still carry the team he retired from — so an "on a roster" list is
+    a narrowing signal, never a licence to skip the recency check.
+    """
+    names = _retirement_fixture(
+        monkeypatch, active_players={"00-RETIRED", "00-CURRENT"}
+    )
+    assert "Retired Veteran" not in names
+    assert "Current Starter" in names
+
+
+def test_a_roster_list_narrows_the_recent_set(monkeypatch):
+    """Both guards bite: recent *and* still rostered."""
+    names = _retirement_fixture(monkeypatch, active_players={"00-RETIRED"})
+    assert names == set()
+
+
+def test_recency_is_measured_against_the_season_being_projected(monkeypatch):
+    """Not against whichever seasons happen to be in the data.
+
+    The panel here holds 2021 and 2025 only. "The last two seasons present"
+    would call 2021 recent; counting back from the 2026 being projected does
+    not.
+    """
+    import fantasypicker.model.dataset as ds
+
+    assert ds.RECENT_SEASONS == 2
+    names = _retirement_fixture(monkeypatch, active_players=None)
+    assert "Retired Veteran" not in names
+
+
+def test_a_player_who_missed_last_season_is_still_projected(monkeypatch):
+    """A year lost to injury is not retirement."""
+    import fantasypicker.model.dataset as ds
+
+    schedule = pd.DataFrame(
+        [
+            {"season": 2026, "week": 1, "team": "PIT", "opponent_team": "CLE",
+             "team_score": np.nan},
+        ]
+    )
+    monkeypatch.setattr(ds, "team_schedule", lambda seasons: schedule)
+    monkeypatch.setattr(ds, "_depth_chart_rank", lambda seasons: pd.DataFrame())
+    history = pd.DataFrame(
+        [
+            {"gsis_id": "00-HURT", "player_display_name": "Missed A Year",
+             "position": "RB", "team": "PIT", "season": 2024, "week": 1,
+             "played": 1, "fantasy_points": 15.0},
+        ]
+    )
+    rows = ds._future_rows((2024, 2026), history, None, None, {"00-HURT"})
+    assert set(rows["player_display_name"]) == {"Missed A Year"}
+
+
+def test_the_panel_cache_key_changes_with_the_build_version(scoring):
+    """A fix nobody sees until tomorrow reads like a fix that did not work."""
+    import fantasypicker.model.dataset as ds
+
+    seasons = (2024, 2025)
+    before = ds.panel_path(scoring, seasons)
+    original = ds.PANEL_VERSION
+    try:
+        ds.PANEL_VERSION = original + 1
+        assert ds.panel_path(scoring, seasons) != before
+    finally:
+        ds.PANEL_VERSION = original
+
+
+def test_sleeper_marking_a_player_inactive_keeps_him_off_the_board():
+    """A team is not proof of anything — a retired player keeps the one he
+    retired from."""
+    from fantasypicker.service import PickerService
+
+    class _Crosswalk:
+        def gsis(self, sleeper_id):
+            return f"00-{sleeper_id}"
+
+    service = PickerService()
+    service.crosswalk = _Crosswalk()
+    service.players = {
+        "playing": {"team": "PIT", "active": True},
+        "retired": {"team": "PIT", "active": False},
+        "unknown": {"team": "PIT"},  # no flag either way: keep him
+        "no_team": {"team": None, "active": True},
+    }
+    active = service._active_gsis_ids()
+    assert "00-playing" in active
+    assert "00-unknown" in active
+    assert "00-retired" not in active
+    assert "00-no_team" not in active

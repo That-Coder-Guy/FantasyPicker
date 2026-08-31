@@ -742,11 +742,20 @@ class PickerService:
         return overrides
 
     def _active_gsis_ids(self) -> set[str]:
-        """Players Sleeper still has on an NFL roster, as gsis IDs."""
+        """Players Sleeper still has on an NFL roster, as gsis IDs.
+
+        Two signals, because a team alone is not proof of anything: Sleeper's
+        player file keeps every player it has ever known, and a retired one can
+        still carry the team he retired from. ``active`` is checked explicitly
+        against False rather than for truthiness, so a record that simply omits
+        the field is not thrown away.
+        """
         assert self.crosswalk is not None
         active: set[str] = set()
         for sleeper_id, meta in self.players.items():
             if not meta.get("team"):
+                continue
+            if meta.get("active") is False:
                 continue
             gsis = self.crosswalk.gsis(str(sleeper_id))
             if gsis:

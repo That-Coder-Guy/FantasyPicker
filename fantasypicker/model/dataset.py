@@ -42,6 +42,21 @@ log = logging.getLogger(__name__)
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE", "K")
 ALL_POSITIONS = SKILL_POSITIONS + ("DST",)
 
+#: How many seasons back a player must have played to be projected for an
+#: upcoming one. Rolling form features carry a player's last real games forward
+#: indefinitely, so without a cutoff every retired player keeps drawing a
+#: credible projection and shows up as a free agent worth adding. Two seasons
+#: covers a full year missed to injury; three would readmit players who have
+#: not taken a snap since before the current roster existed.
+RECENT_SEASONS = 2
+
+#: Bump whenever a change alters what a built panel contains. It is part of the
+#: cache filename, so old panels are abandoned rather than reused for their
+#: remaining TTL.
+#:
+#: 2 — retired players no longer receive future rows.
+PANEL_VERSION = 2
+
 #: Raw weekly stats carried through the panel and used to build rolling form.
 USAGE_COLUMNS = [
     "attempts",
@@ -248,10 +263,23 @@ def _future_rows(
     the caller fills from Sleeper's live player data, so an August trade is
     reflected immediately) and otherwise from the last team he appeared for.
 
-    ``active_players`` — gsis IDs Sleeper still lists as on a roster — is what
-    keeps last season's since-retired quarterback out of this season's board.
-    Without it, the fallback is "appeared in one of the last two seasons",
-    narrowed by the current season's depth charts when those exist.
+    Who gets a future row is guarded twice, and both guards always run:
+
+    1. **Recency.** A player must have appeared within the last
+       :data:`RECENT_SEASONS` seasons *counted back from the season being
+       projected*. This is the guard that does not depend on anyone else's
+       metadata being right, and it is what keeps a quarterback who retired
+       five years ago off the board: his rolling form features carry forward
+       from his last real game, so without this he draws a perfectly plausible
+       projection and turns up as a free agent worth adding.
+    2. **Rostered now**, when we know it. ``active_players`` is the set of gsis
+       IDs the platform still lists on an NFL roster; it *narrows* the recent
+       set rather than replacing it. When it is unavailable the recent set is
+       narrowed by the upcoming season's depth charts instead, where those
+       exist.
+
+    The cost of the first guard is a player returning from two full seasons out
+    — rare, and there would be nothing recent to project him from anyway.
     """
     sched = team_schedule(seasons)
     if sched.empty or history.empty:
@@ -277,14 +305,17 @@ def _future_rows(
             latest["gsis_id"].map(team_overrides).fillna(latest["team"])
         )
 
+    upcoming = int(future_games["season"].min())
+    # Measured against the season being projected, not against whatever seasons
+    # happen to be in the data: "the last two seasons present in the panel" is
+    # a different question, and answers it wrong for any player whose last
+    # season is sparse.
+    cutoff = upcoming - RECENT_SEASONS
+    recent = set(played[played["season"] >= cutoff]["gsis_id"].astype(str))
+
     if active_players:
-        latest = latest[latest["gsis_id"].isin(active_players)]
+        recent &= {str(p) for p in active_players}
     else:
-        # Only carry forward players who appeared recently; a 2018 practice-squad
-        # tight end does not need a row for every 2026 game.
-        recent_seasons = sorted(played["season"].unique())[-2:]
-        recent = set(played[played["season"].isin(recent_seasons)]["gsis_id"])
-        upcoming = int(future_games["season"].min())
         charts = _depth_chart_rank((upcoming,))
         if not charts.empty:
             listed = set(charts["gsis_id"].astype(str))
@@ -293,10 +324,10 @@ def _future_rows(
             exempt = set(
                 played[played["position"].isin(["K", "DST"])]["gsis_id"].astype(str)
             )
-            filtered = {p for p in recent if str(p) in listed or str(p) in exempt}
+            filtered = {p for p in recent if p in listed or p in exempt}
             if filtered:
                 recent = filtered
-        latest = latest[latest["gsis_id"].isin(recent)]
+    latest = latest[latest["gsis_id"].astype(str).isin(recent)]
 
     rows = latest.merge(
         future_games[["season", "week", "team", "opponent_team"]], on="team", how="inner"
@@ -711,9 +742,17 @@ def panel_path(scoring: ScoringRules, seasons: tuple[int, ...]) -> Path:
     and the rolling features derived from them — are league-specific. Two
     leagues that score identically share one file, which is the common case for
     anyone running more than one half-PPR league.
+
+    :data:`PANEL_VERSION` is in the key so that changing how the panel is built
+    retires the old files instead of serving them for another twelve hours. A
+    fix nobody sees until tomorrow reads exactly like a fix that did not work.
     """
     digest = hashlib.sha1(
-        (json.dumps(scoring.settings, sort_keys=True) + repr(seasons)).encode()
+        (
+            json.dumps(scoring.settings, sort_keys=True)
+            + repr(seasons)
+            + f"|v{PANEL_VERSION}"
+        ).encode()
     ).hexdigest()[:12]
     return get_settings().model_dir / f"panel_{digest}.parquet"
 

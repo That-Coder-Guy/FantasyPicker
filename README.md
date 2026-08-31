@@ -597,6 +597,15 @@ projection of zero).
 - **Kickers and defenses are barely predictable.** Spearman 0.18 and 0.30. The
   model knows this and its ranges are correspondingly wide. Stream them on
   matchup and do not think about it further.
+- **Only players who have played recently are projected.** A player's form
+  features carry his last real games forward indefinitely, so without a cutoff
+  a quarterback who retired five years ago draws a perfectly credible
+  projection and turns up on the waiver and drops pages as someone worth
+  adding. Anyone who has not appeared in the last two seasons is left out of
+  the board entirely, and the platform's own roster list narrows that further
+  where it is available. The cost is a player returning from two full seasons
+  out — rare, and there would be nothing recent to project him from anyway.
+
 - **Rookies have no history.** Projections for them lean on the market
   (Sleeper's own projections, rescored under your rules) rather than on our
   features, which have nothing to work from. The board shows model value and ADP
@@ -617,7 +626,7 @@ projection of zero).
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 325 tests, no network access required
+pytest                          # 332 tests, no network access required
 fantasypicker serve --reload
 ```
 

@@ -305,6 +305,23 @@ STAT_LABELS: dict[int, str] = {
 }
 
 
+#: ESPN numbers team defenses from this base, negated: ATL (proTeamId 1) is
+#: -16001, HOU (34) is -16034. The draft feed carries only a player id, so a
+#: drafted defense is unidentifiable without undoing that.
+DST_ID_BASE = 16000
+
+
+def dst_team_from_player_id(espn_id: object) -> str | None:
+    """The team abbreviation behind a synthetic D/ST player id, if it is one."""
+    try:
+        value = int(espn_id)
+    except (TypeError, ValueError):
+        return None
+    if value >= 0:
+        return None
+    return PRO_TEAMS.get(abs(value) - DST_ID_BASE)
+
+
 def stat_label(stat_id: int) -> str:
     """A readable name for a stat ID, falling back to the number itself."""
     return STAT_LABELS.get(int(stat_id), f"stat {stat_id}")

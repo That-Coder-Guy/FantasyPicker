@@ -375,3 +375,59 @@ def test_no_avatar_means_no_url_rather_than_a_broken_image():
         [{"user_id": "u1", "display_name": "alice"}],
     )
     assert teams[1].avatar_url is None
+
+
+# --------------------------------------------------- rosters during the draft
+
+
+def test_sleeper_picks_group_into_rosters():
+    from fantasypicker.platforms import picks_by_roster
+
+    picks = [
+        {"roster_id": 1, "player_id": "100", "pick_no": 1},
+        {"roster_id": 2, "player_id": "200", "pick_no": 2},
+        {"roster_id": 1, "player_id": "300", "pick_no": 3},
+        {"roster_id": None, "player_id": "bad"},   # malformed rows are skipped
+        {"roster_id": 1, "player_id": ""},
+    ]
+    assert picks_by_roster(picks) == {1: ["100", "300"], 2: ["200"]}
+
+
+@pytest.mark.asyncio
+async def test_a_live_draft_populates_the_league_page(monkeypatch):
+    """The whole point: mid-draft, every team's picks show up without waiting
+    for the platform to move players onto rosters when the draft ends."""
+    from fantasypicker.service import PickerService
+
+    service = PickerService()
+    league = await load_league(
+        SleeperClient(httpx.AsyncClient(transport=stub_transport())),
+        "999",
+        username="alice",
+    )
+    for team in league.teams.values():
+        team.players = []  # pre-draft: nobody has anyone
+    service.league = league
+
+    class _Source:
+        platform = "sleeper"
+
+        async def refresh(self, league, *, fresh=False):
+            return False
+
+        async def draft_rosters(self, league):
+            return {1: ["100", "200"], 2: ["300"]}
+
+    service.source = _Source()
+
+    async def fake_enter(self):
+        self._client = httpx.AsyncClient(transport=stub_transport())
+        self._owned = True
+        return self
+
+    monkeypatch.setattr(SleeperClient, "__aenter__", fake_enter)
+
+    changed = await service.refresh_live(force=True)
+    assert changed["rosters"] is True
+    assert league.teams[1].players == ["100", "200"]
+    assert league.teams[2].players == ["300"]

@@ -49,7 +49,12 @@ from .model.train import ProjectionModel, load_model, train_model
 from .credentials import EspnCredentials, load_credentials, save_credentials
 from .espn import league as espn_league
 from .espn.client import EspnAuthRequired
-from .platforms import EspnSource, LeagueSource, SleeperSource
+from .platforms import (
+    EspnSource,
+    LeagueSource,
+    SleeperSource,
+    apply_draft_rosters,
+)
 from .sleeper.client import SleeperClient
 from .sleeper.league import LeagueContext, load_league
 from .sleeper.scoring import ScoringRules
@@ -367,6 +372,21 @@ class PickerService:
             # anyone's league.
             async with SleeperClient() as client:
                 players = await client.players(fresh=force)
+
+            # Mid-draft, neither platform has moved drafted players onto a
+            # roster yet, so the pick feed is the only live account of who owns
+            # whom. Filling empty rosters from it is what lets the League,
+            # Trades and waiver views work during a draft instead of showing
+            # twelve empty teams.
+            if any(not t.players for t in self.league.teams.values()):
+                try:
+                    drafted = await self.source.draft_rosters(self.league)
+                except (FetchError, ValueError) as exc:
+                    log.debug("draft feed unavailable: %s", exc)
+                else:
+                    if apply_draft_rosters(self.league, drafted):
+                        changed["rosters"] = True
+                        self.league._matchup_cache.clear()
         except (FetchError, EspnAuthRequired) as exc:
             # Never fail a page because a refresh could not reach the platform;
             # the previous state is stale but still useful. But say so where the

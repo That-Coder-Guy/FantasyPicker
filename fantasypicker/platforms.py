@@ -25,6 +25,7 @@ from typing import Protocol
 from .credentials import EspnCredentials
 from .espn import league as espn_league
 from .espn.client import EspnClient
+from .espn.ids import dst_team_from_player_id
 from .sleeper.client import SleeperClient
 from .sleeper.league import LeagueContext, refresh_teams
 
@@ -47,6 +48,9 @@ class LeagueSource(Protocol):
 
     async def draft_order(self, league: LeagueContext) -> dict[str, int]:
         """owner id -> draft slot."""
+
+    async def draft_rosters(self, league: LeagueContext) -> dict[int, list[str]]:
+        """roster_id -> the players that roster has drafted so far."""
 
 
 class SleeperSource:
@@ -73,6 +77,10 @@ class SleeperSource:
             )
             picks = await client.draft_picks(str(draft_obj.get("draft_id")))
             return draft_obj, picks
+
+    async def draft_rosters(self, league: LeagueContext) -> dict[int, list[str]]:
+        _, picks = await self.draft(league)
+        return picks_by_roster(picks)
 
     async def draft_order(self, league: LeagueContext) -> dict[str, int]:
         async with SleeperClient() as client:
@@ -161,12 +169,59 @@ class EspnSource:
             payload = await client.draft(league.league_id, self.season)
         return _espn_draft(payload, league)
 
+    async def draft_rosters(self, league: LeagueContext) -> dict[int, list[str]]:
+        async with self.client() as client:
+            payload = await client.draft(league.league_id, self.season)
+        _, picks = _espn_draft(payload, league)
+        return picks_by_roster(picks)
+
     async def draft_order(self, league: LeagueContext) -> dict[str, int]:
         async with self.client() as client:
             payload = await client.draft(league.league_id, self.season)
         draft_obj, _ = _espn_draft(payload, league)
         order = (draft_obj or {}).get("draft_order") or {}
         return {str(k): int(v) for k, v in order.items()}
+
+
+def picks_by_roster(picks: list[dict]) -> dict[int, list[str]]:
+    """Group a Sleeper-shaped pick feed into rosters, in pick order."""
+    out: dict[int, list[str]] = {}
+    for pick in picks or []:
+        try:
+            roster_id = int(pick.get("roster_id"))
+        except (TypeError, ValueError):
+            continue
+        player = str(pick.get("player_id") or "")
+        if player:
+            out.setdefault(roster_id, []).append(player)
+    return out
+
+
+def apply_draft_rosters(
+    league: LeagueContext, by_roster: dict[int, list[str]]
+) -> bool:
+    """Fill empty rosters from the draft feed. True when anything changed.
+
+    Neither platform moves drafted players onto a roster until the draft
+    finishes — espn.com shows the same empty teams this app did — but both
+    publish every pick the moment it happens. During a draft the pick feed is
+    therefore the only live account of who owns whom, and it is what makes
+    "what is left at my position" answerable while it matters.
+
+    Only rosters that came back empty are filled, so a completed draft's real
+    rosters (which also carry waiver moves and trades) always win.
+    """
+    changed = False
+    for roster_id, drafted in by_roster.items():
+        team = league.teams.get(roster_id)
+        if team is None or team.players or not drafted:
+            continue
+        team.players = list(drafted)
+        # Nobody sets a lineup mid-draft; the League page solves a best-possible
+        # one from the roster, which is the useful view during a draft anyway.
+        team.starters = []
+        changed = True
+    return changed
 
 
 def _crosswalk():
@@ -227,7 +282,9 @@ def _espn_draft(
             team_id = int(pick.get("teamId"))
         except (TypeError, ValueError):
             continue
-        sleeper_id = crosswalk.from_espn(pick.get("playerId"))
+        sleeper_id = crosswalk.from_espn(pick.get("playerId")) or (
+            dst_team_from_player_id(pick.get("playerId"))
+        )
         if not sleeper_id:
             continue
         try:
@@ -239,6 +296,9 @@ def _espn_draft(
                 "player_id": str(sleeper_id),
                 "pick_no": pick_no,
                 "draft_slot": slot_by_team.get(team_id, 0),
+                # Kept so a live draft can be turned back into rosters; the
+                # draft engine itself works in slots and ignores this.
+                "roster_id": team_id,
             }
         )
 

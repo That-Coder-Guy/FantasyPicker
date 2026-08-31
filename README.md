@@ -375,7 +375,11 @@ Seven tabs:
   automatically; you choose whether to model them as they have their lineup set
   or at their best.
 - **League** — every team in the league, ranked by the best lineup its roster
-  could field, with that lineup laid out. Before the draft it still lists every
+  could field, with that lineup laid out. **During a draft this fills from the
+  live pick feed**: neither Sleeper nor ESPN moves drafted players onto a
+  roster until the draft ends (espn.com shows empty teams too), but both
+  publish every pick as it happens, so every team's haul is visible while the
+  draft is still running — and the waiver and trade views work off it. Before the draft it still lists every
   team, ordered by draft slot, since that is the only thing distinguishing them
   when every roster is empty. Toggle to what each manager actually
   has set, and the difference is shown: who is leaving points on their bench,

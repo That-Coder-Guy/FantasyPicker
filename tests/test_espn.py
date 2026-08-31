@@ -975,3 +975,93 @@ async def test_a_drafted_league_with_empty_rosters_is_still_retried():
     league, _ = await load_league(_Client(), "999", 2026)
     assert asked == [None, 3]
     assert len(league.teams[1].players) == 2
+
+
+# --------------------------------------------------- rosters during the draft
+
+
+DRAFT_PAYLOAD = {
+    "settings": {
+        "size": 2,
+        "draftSettings": {"type": "SNAKE", "pickOrder": [1, 2]},
+        "rosterSettings": {"lineupSlotCounts": {"0": 1, "2": 2, "20": 6}},
+    },
+    "draftDetail": {
+        "drafted": False,
+        "inProgress": True,
+        "pickOrder": [1, 2],
+        "picks": [
+            {"teamId": 1, "playerId": 3139477, "overallPickNumber": 1},
+            {"teamId": 2, "playerId": 4241457, "overallPickNumber": 2},
+            {"teamId": 1, "playerId": -16012, "overallPickNumber": 3},
+        ],
+    },
+}
+
+
+def test_a_drafted_defense_is_identified_from_its_synthetic_id():
+    """The pick feed carries only a player id, and ESPN numbers defenses
+    negatively — without undoing that, every drafted D/ST is lost."""
+    from fantasypicker.espn.ids import dst_team_from_player_id
+
+    assert dst_team_from_player_id(-16012) == "KC"
+    assert dst_team_from_player_id(-16001) == "ATL"
+    assert dst_team_from_player_id(3139477) is None
+    assert dst_team_from_player_id(None) is None
+
+
+def test_picks_become_rosters_keyed_by_team(monkeypatch):
+    from fantasypicker.platforms import _espn_draft, picks_by_roster
+
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", crosswalk)
+
+    from fantasypicker.sleeper.league import Team
+
+    class _League:
+        teams = {
+            1: Team(roster_id=1, owner_id="a", display_name="A", team_name="A"),
+            2: Team(roster_id=2, owner_id="b", display_name="B", team_name="B"),
+        }
+        league_id = "999"
+        roster_size = 9
+
+    _, picks = _espn_draft(DRAFT_PAYLOAD, _League())
+    by_roster = picks_by_roster(picks)
+    assert by_roster[1] == ["4034", "KC"]  # includes the drafted defense
+    assert by_roster[2] == ["6794"]
+
+
+def test_draft_picks_fill_empty_rosters_but_never_overwrite_real_ones():
+    """During a draft the pick feed is the only live account of who owns whom;
+    once the draft is done the real rosters carry waivers and trades too, so
+    they must win."""
+    from fantasypicker.platforms import apply_draft_rosters
+    from fantasypicker.sleeper.league import Team
+
+    class _League:
+        teams = {
+            1: Team(roster_id=1, owner_id="a", display_name="A", team_name="A"),
+            2: Team(
+                roster_id=2, owner_id="b", display_name="B", team_name="B",
+                players=["already", "here"],
+            ),
+        }
+
+    league = _League()
+    changed = apply_draft_rosters(league, {1: ["x", "y"], 2: ["ignored"]})
+    assert changed is True
+    assert league.teams[1].players == ["x", "y"]
+    assert league.teams[2].players == ["already", "here"]  # untouched
+    # Nothing left to fill: a second pass reports no change.
+    assert apply_draft_rosters(league, {1: ["x", "y"]}) is False
+
+
+def test_applying_an_empty_draft_feed_changes_nothing():
+    from fantasypicker.platforms import apply_draft_rosters
+    from fantasypicker.sleeper.league import Team
+
+    class _League:
+        teams = {1: Team(roster_id=1, owner_id="a", display_name="A", team_name="A")}
+
+    assert apply_draft_rosters(_League(), {}) is False
+    assert apply_draft_rosters(_League(), {1: []}) is False

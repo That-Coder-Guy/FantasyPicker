@@ -182,21 +182,46 @@ async function refreshCurrentView({ quiet = false } = {}) {
   }
 }
 
+function ago(seconds) {
+  if (seconds === null || seconds === undefined) return "never";
+  if (seconds < 10) return "just now";
+  if (seconds < 90) return `${Math.round(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${Math.round(seconds / 3600)}h ago`;
+}
+
 function setLiveState(mode, changed) {
   const wrap = $("live-state");
   if (!wrap) return;
   wrap.hidden = false;
+  const platform = (state.league && state.league.platform) === "espn" ? "ESPN" : "Sleeper";
+
+  // A refresh that failed is the one thing that must never be silent: stale
+  // rosters served quietly look exactly like the app refusing to update.
+  const failure = state.league && state.league.refresh_error;
+  if (failure && mode !== "syncing") {
+    wrap.dataset.mode = "stale";
+    $("live-label").textContent = `${platform} refresh failed — showing cached`;
+    wrap.title = failure;
+    return;
+  }
   wrap.dataset.mode = mode;
+
   const labels = {
     live: "up to date",
-    syncing: "checking Sleeper…",
-    stale: "Sleeper unreachable — showing cached",
+    syncing: `checking ${platform}…`,
+    stale: `${platform} unreachable — showing cached`,
   };
   let label = labels[mode] || mode;
   if (mode === "live" && changed && (changed.rosters || changed.players)) {
     label = changed.rosters ? "rosters updated" : "injury status updated";
+  } else if (mode === "live" && state.league && state.league.last_refresh) {
+    // Say when, so "it is not updating" is checkable rather than a feeling.
+    const seconds = Date.now() / 1000 - state.league.last_refresh;
+    label = `rosters read ${ago(seconds)}`;
   }
   $("live-label").textContent = label;
+  wrap.title = "";
 }
 
 // A tab left open overnight should not show yesterday's rosters the moment it

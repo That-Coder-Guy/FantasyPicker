@@ -95,6 +95,13 @@ async def _fetch_error_handler(_request, exc: FetchError) -> JSONResponse:
     )
 
 
+@app.exception_handler(EspnAuthRequired)
+async def _espn_auth_handler(_request, exc: EspnAuthRequired) -> JSONResponse:
+    # Anywhere ESPN refuses the stored cookies, the answer is the same: tell
+    # the user to re-copy them — never a bare "Internal Server Error".
+    return _fail(401, str(exc), needs_cookies=True)
+
+
 # --------------------------------------------------------------------------- #
 # league
 # --------------------------------------------------------------------------- #

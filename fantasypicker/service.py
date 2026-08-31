@@ -48,6 +48,7 @@ from .model.predict import (
 from .model.train import ProjectionModel, load_model, train_model
 from .credentials import EspnCredentials, load_credentials, save_credentials
 from .espn import league as espn_league
+from .espn.client import EspnAuthRequired
 from .platforms import EspnSource, LeagueSource, SleeperSource
 from .sleeper.client import SleeperClient
 from .sleeper.league import LeagueContext, load_league
@@ -123,8 +124,11 @@ class PickerService:
     #: Remembered leagues; read from disk on first access, not at import, so
     #: importing the package never touches the filesystem.
     _state: AppState | None = None
-    #: When Sleeper was last re-polled for rosters and injury status.
+    #: When the platform was last re-polled for rosters and injury status.
     last_refresh: float | None = None
+    #: Why the last refresh failed, if it did. Shown in the UI: silently
+    #: serving stale rosters reads exactly like the app being broken.
+    refresh_error: str | None = None
     _warm_task: asyncio.Task | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -363,11 +367,15 @@ class PickerService:
             # anyone's league.
             async with SleeperClient() as client:
                 players = await client.players(fresh=force)
-        except FetchError as exc:
-            # Never fail a page because a refresh could not reach Sleeper; the
-            # previous state is stale but still useful.
+        except (FetchError, EspnAuthRequired) as exc:
+            # Never fail a page because a refresh could not reach the platform;
+            # the previous state is stale but still useful. But say so where the
+            # user can see it — expired ESPN cookies used to fail invisibly
+            # here, which read exactly like the app refusing to update.
+            self.refresh_error = str(exc)
             log.warning("live refresh failed, serving cached state: %s", exc)
             return changed
+        self.refresh_error = None
 
         if players and players is not self.players:
             self.players = players
@@ -389,10 +397,14 @@ class PickerService:
         return {
             "connected": True,
             "platform": self.platform,
+            "refresh_error": self.refresh_error,
+            # So the UI can say when the rosters were last re-read. "Not
+            # updating" is otherwise unfalsifiable from the screen.
+            "last_refresh": self.last_refresh,
+            "current_week": int((state or {}).get("week") or league.current_week),
             "league_id": league.league_id,
             "name": league.name,
             "season": league.season,
-            "current_week": int((state or {}).get("week") or league.current_week),
             "teams": league.team_count,
             "scoring": league.scoring.describe(),
             "unsupported_scoring": list(league.scoring.unsupported),

@@ -123,10 +123,23 @@ class EspnSource:
 
     async def refresh(self, league: LeagueContext, *, fresh: bool = False) -> bool:
         async with self.client() as client:
+            # ESPN advances the scoring period on its own clock; a week frozen
+            # at connect time would keep every later request asking about the
+            # old one. The league call is cached for minutes, so this is cheap.
+            meta = await client.league(league.league_id, self.season)
+            if meta:
+                league.current_week = espn_league.current_week(meta)
             payload = await client.rosters(
                 league.league_id, self.season, league.current_week, fresh=fresh
             )
         if not payload or not payload.get("teams"):
+            # An answer with no teams is ESPN reporting a problem, not a league
+            # with nobody in it — say so rather than silently changing nothing.
+            log.warning(
+                "ESPN roster refresh for league %s returned no teams: %s",
+                league.league_id,
+                str(payload)[:300] if payload else "(empty response)",
+            )
             return False
         before = {rid: tuple(sorted(t.players)) for rid, t in league.teams.items()}
         teams, unresolved = espn_league.build_teams(

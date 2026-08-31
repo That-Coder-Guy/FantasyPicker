@@ -734,3 +734,74 @@ async def test_missing_teams_and_pictures_404_cleanly():
     assert await service.team_image(99) is None
     service.league.teams[1].avatar = None
     assert await service.team_image(1) is None
+
+
+# ------------------------------------------------------------------ refreshing
+
+
+@pytest.mark.asyncio
+async def test_refresh_follows_espn_to_the_new_scoring_period(monkeypatch):
+    """ESPN advances the week on its own clock.
+
+    A week frozen at connect time keeps every later roster request asking
+    about the old one, so the page stops changing — which reads as "the data
+    is not updating".
+    """
+    from fantasypicker.platforms import EspnSource
+
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["status"]["currentMatchupPeriod"] = 7
+    asked = {}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def league(self, league_id, season, *, fresh=False):
+            return payload
+
+        async def rosters(self, league_id, season, week=None, *, fresh=False):
+            asked["week"] = week
+            return payload
+
+    source = EspnSource(2026)
+    monkeypatch.setattr(source, "client", lambda: _Client())
+    monkeypatch.setattr(
+        "fantasypicker.platforms._crosswalk", lambda: crosswalk()
+    )
+
+    league, _ = await load_league(make_client({"mRoster": LEAGUE}), "999", 2026)
+    assert league.current_week == 3  # as it was at connect time
+
+    await source.refresh(league)
+    assert league.current_week == 7
+    assert asked["week"] == 7
+
+
+@pytest.mark.asyncio
+async def test_an_expired_cookie_during_refresh_is_reported_not_swallowed(monkeypatch):
+    """The failure mode behind "it stopped updating": ESPN starts refusing the
+    stored cookies, the refresh fails, and the app quietly keeps serving the
+    rosters it already had."""
+    from fantasypicker.service import PickerService
+
+    service = PickerService()
+    service.platform = "espn"
+
+    class _Source:
+        platform = "espn"
+
+        async def refresh(self, league, *, fresh=False):
+            raise EspnAuthRequired("999", had_cookies=True)
+
+    service.source = _Source()
+    league, _ = await load_league(make_client({"mRoster": LEAGUE}), "999", 2026)
+    service.league = league
+
+    changed = await service.refresh_live(force=True)
+    assert changed == {"rosters": False, "players": False}
+    assert service.refresh_error is not None
+    assert "espn_s2" in service.refresh_error

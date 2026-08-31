@@ -128,6 +128,7 @@ const LOADERS = {
   teams: loadTeams,
   board: loadBoard,
   waivers: loadWaivers,
+  drops: loadDrops,
   trades: loadTrades,
   model: loadModel,
 };
@@ -154,7 +155,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
  * Sleeper at most every 30s regardless, so these are about how quickly a change
  * that already reached the server reaches the screen. The draft board is the
  * one place seconds matter; the model card never changes at all. */
-const REFRESH_SECONDS = { draft: 20, matchup: 90, teams: 120, board: 300, waivers: 180, trades: 0, model: 0 };
+const REFRESH_SECONDS = { draft: 20, matchup: 90, teams: 120, board: 300, waivers: 180, drops: 0, trades: 0, model: 0 };
 
 function scheduleAutoRefresh() {
   clearInterval(state.refreshTimer);
@@ -1051,6 +1052,7 @@ function rangeCell(floor, mid, ceiling, scale) {
 
 $("waivers-refresh").addEventListener("click", () => refreshCurrentView());
 $("trades-refresh").addEventListener("click", () => loadTrades());
+$("drops-refresh").addEventListener("click", () => loadDrops());
 
 async function loadWaivers() {
   const table = $("waivers-table");
@@ -1091,6 +1093,82 @@ async function loadWaivers() {
   }
 }
 
+
+
+/* ------------------------------------------------------------------ drops */
+
+function dropPlayerLine(players, id, extra) {
+  const info = players[id] || { name: id, position: "?", ros_points: 0 };
+  const line = el("span", "drop-player clickable");
+  line.append(posSpan(info.position));
+  line.append(el("span", null, ` ${info.name} `));
+  line.append(el("small", "muted", extra || `${fmt(info.ros_points, 0)} ros`));
+  line.addEventListener("click", () => openPlayer(id));
+  return line;
+}
+
+async function loadDrops() {
+  const list = $("drops-upgrades");
+  const deadCard = $("drops-dead-card");
+  const deadTable = $("drops-dead");
+  try {
+    list.innerHTML = "";
+    list.append(el("p", "muted", "Comparing every roster spot against the open pool…"));
+    const data = await api("/api/drops");
+    list.innerHTML = "";
+
+    if (!data.upgrades.length) {
+      list.append(
+        el("p", "muted", "Nobody available improves your lineup — every free agent who would start is already rostered.")
+      );
+    }
+    data.upgrades.forEach((row) => {
+      const card = el("div", "drop-card");
+      const swap = el("div", "drop-swap");
+      const out = el("div", "drop-side");
+      out.append(el("h4", null, "Drop"));
+      out.append(dropPlayerLine(data.players, row.drop));
+      const inn = el("div", "drop-side");
+      inn.append(el("h4", null, "Add"));
+      inn.append(dropPlayerLine(data.players, row.add));
+      swap.append(out);
+      swap.append(el("div", "drop-arrow muted", "→"));
+      swap.append(inn);
+      card.append(swap);
+      card.append(el("div", "drop-gain good", `+${fmt(row.gain, 1)} ros pts`));
+      card.append(el("p", "muted small", row.reason));
+      list.append(card);
+    });
+
+    deadCard.hidden = !data.dead_weight.length;
+    deadTable.innerHTML = "";
+    if (data.dead_weight.length) {
+      deadTable.append(
+        tableHead(["Player", "Pos", "Team", num("ROS pts"), num("Cost to cut"), "Why"])
+      );
+      const body = el("tbody");
+      data.dead_weight.forEach((row) => {
+        const info = data.players[row.drop] || {};
+        const tr = el("tr", "clickable");
+        tr.append(el("td", null, info.name || row.drop));
+        const pos = el("td");
+        pos.append(posSpan(info.position || "?"));
+        tr.append(pos);
+        tr.append(el("td", null, info.team || ""));
+        tr.append(el("td", "num-col", fmt(info.ros_points, 0)));
+        tr.append(el("td", "num-col", fmt(row.cost, 1)));
+        tr.append(el("td", "muted small", row.reason));
+        tr.addEventListener("click", () => openPlayer(row.drop));
+        body.append(tr);
+      });
+      deadTable.append(body);
+    }
+
+    $("drops-notes").textContent = (data.notes || []).join(" ");
+  } catch (error) {
+    showError(list, error);
+  }
+}
 
 /* ----------------------------------------------------------------- trades */
 

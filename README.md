@@ -364,7 +364,7 @@ reversal are all handled.
 
 ## The app
 
-Seven tabs:
+Eight tabs:
 
 - **Draft** — ranked recommendations with the reasoning spelled out, your
   roster, unfilled slots, and a chart of which positions fall off hardest before
@@ -393,6 +393,19 @@ Seven tabs:
   the rest of the season and this week, with the drop candidate named. Sleeper's
   trending-adds count sits alongside as a crowd signal, clearly separate from the
   model's own view.
+- **Drops** — the same question from the other end. Waivers pairs every add
+  with your single worst player, which is the wrong pairing: adding a tight end
+  when you already start one should cost you a tight end, not your worst
+  running back. So this asks, for *every* player you roster, whether anyone in
+  the open pool leaves your best lineup better off with that specific player
+  gone — both halves solved exactly, with the same roster valuation the trade
+  engine uses, so the two pages can never disagree about what a roster is
+  worth. Two kinds of answer come out. **Upgrades** are swaps that gain points;
+  do them. **Free to cut** are players nobody in the pool beats but who never
+  reach your lineup either — the roster spots to spend when a bye week forces a
+  move, which is worth knowing before 11pm on Saturday rather than during it.
+  Values are rest-of-season, because a drop is permanent. Injured-reserve and
+  taxi players are left out: they hold no active roster spot and block nobody.
 - **Trades** — proposals the other manager should actually accept. A player's
   value depends on the roster he lands on, so trades exist that help both
   sides; the engine values every roster as the best lineup it could field over
@@ -485,6 +498,7 @@ GET  /api/board         full ranked board  ?position=RB&limit=200
 GET  /api/matchup       ?week=4&opponent_mode=auto|declared|optimal&sims=20000
 GET  /api/teams         ?week=4 — every team, its lineup, bench and strengths
 GET  /api/waivers       ?week=4
+GET  /api/drops         ?roster_id=
 GET  /api/trades        ?roster_id=&chains=true&max_package=2
 GET  /api/player/{id}   projection, context, and game log
 GET  /api/model         the model card

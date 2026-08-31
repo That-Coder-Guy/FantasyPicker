@@ -164,8 +164,13 @@ class TradeReport:
         }
 
 
-class _Evaluator:
-    """Cached roster valuation over one set of rest-of-season projections."""
+class RosterEvaluator:
+    """Cached roster valuation over one set of rest-of-season projections.
+
+    Shared with the drop finder so both pages price a roster identically — two
+    views that disagreed about what a team is worth would be worse than either
+    alone.
+    """
 
     def __init__(self, league: LeagueContext, projections: ProjectionSet) -> None:
         self.league = league
@@ -259,7 +264,7 @@ class _Evaluator:
         return players, adds, drops
 
 
-def _candidates(evaluator: _Evaluator, players: frozenset, *, limit: int) -> list[str]:
+def _candidates(evaluator: RosterEvaluator, players: frozenset, *, limit: int) -> list[str]:
     """Who a team might plausibly put in a deal.
 
     Two kinds of player move in real trades: the expendable (low marginal value
@@ -287,7 +292,7 @@ def _packages(candidates: list[str], max_package: int) -> list[tuple[str, ...]]:
 
 
 def _evaluate(
-    evaluator: _Evaluator,
+    evaluator: RosterEvaluator,
     my_players: frozenset,
     their_players: frozenset,
     give: tuple[str, ...],
@@ -343,12 +348,12 @@ def _likelihood(their_gain: float, balance: float) -> tuple[str, float]:
     return "a stretch", 0.3
 
 
-def _positions(evaluator: _Evaluator, players: tuple[str, ...]) -> str:
+def _positions(evaluator: RosterEvaluator, players: tuple[str, ...]) -> str:
     return "/".join(evaluator.position.get(p, "?") for p in players)
 
 
 def _rationale(
-    evaluator: _Evaluator,
+    evaluator: RosterEvaluator,
     give: tuple[str, ...],
     get: tuple[str, ...],
     my_gain: float,
@@ -373,7 +378,7 @@ def _rationale(
 
 
 def _search_pair(
-    evaluator: _Evaluator,
+    evaluator: RosterEvaluator,
     my_id: int,
     my_players: frozenset,
     their_team,
@@ -496,7 +501,7 @@ def find_trades(
             [], [], ["Your roster is empty — trades start mattering after the draft."]
         )
 
-    evaluator = _Evaluator(league, season_projections)
+    evaluator = RosterEvaluator(league, season_projections)
     opponents = [
         t for rid, t in sorted(league.teams.items()) if rid != int(my_roster_id)
     ]
@@ -548,7 +553,7 @@ def find_trades(
 
 
 def _find_chains(
-    evaluator: _Evaluator,
+    evaluator: RosterEvaluator,
     league: LeagueContext,
     my_id: int,
     my_label: str,

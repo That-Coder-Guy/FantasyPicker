@@ -108,6 +108,7 @@ def test_projection_routes_report_loading_rather_than_hanging(client):
         "/api/draft",
         "/api/board",
         "/api/waivers",
+        "/api/drops",
         "/api/trades",
     ):
         response = http.get(path)

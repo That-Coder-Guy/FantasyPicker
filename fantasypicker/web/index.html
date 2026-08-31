@@ -30,6 +30,7 @@
     <button class="tab" data-view="teams">League</button>
     <button class="tab" data-view="board">Board</button>
     <button class="tab" data-view="waivers">Waivers</button>
+    <button class="tab" data-view="drops">Drops</button>
     <button class="tab" data-view="trades">Trades</button>
     <button class="tab" data-view="model">Model</button>
   </nav>
@@ -253,6 +254,30 @@
       <div class="table-wrap"><table class="data" id="waivers-table"></table></div>
       <p class="muted small" id="waivers-notes"></p>
     </div>
+  </section>
+
+  <!-- Drops ------------------------------------------------------------ -->
+  <section id="view-drops" class="view">
+    <div class="toolbar">
+      <button id="drops-refresh" class="ghost">Refresh</button>
+      <span class="muted small">
+        For every player you roster, the best the open pool offers in his
+        place — the drop is matched to the add, not to your worst player.
+      </span>
+    </div>
+    <div class="card">
+      <h2>Upgrades available</h2>
+      <div id="drops-upgrades"></div>
+    </div>
+    <div class="card" id="drops-dead-card" hidden>
+      <h2>Free to cut</h2>
+      <p class="muted small">
+        Nobody in the pool beats them, but they never reach your lineup either.
+        These are the roster spots to spend when a bye week forces a move.
+      </p>
+      <div class="table-wrap"><table class="data" id="drops-dead"></table></div>
+    </div>
+    <p class="muted small" id="drops-notes"></p>
   </section>
 
   <!-- Trades ----------------------------------------------------------- -->

@@ -32,6 +32,7 @@ from .data.crosswalk import Crosswalk, load_crosswalk, normalize_team
 from .data.nflverse import current_nfl_season
 from .data.rankings import load_expert_ranks
 from .engine import draft as draft_engine
+from .engine import drops as drop_engine
 from .engine import league_view
 from .engine import trades as trade_engine
 from .engine import waivers as waiver_engine
@@ -1023,6 +1024,61 @@ class PickerService:
         payload["my_roster_id"] = int(roster_id)
         payload["my_team"] = league.teams[int(roster_id)].label if int(roster_id) in league.teams else None
         return payload
+
+    async def drops(self, *, roster_id: int | None = None) -> dict[str, Any]:
+        """Who to cut, and who in the open pool to cut them for."""
+        self._require_ready()
+        await self.refresh_live()
+        assert self.league is not None and self.season_projections is not None
+        league = self.league
+        roster_id = roster_id if roster_id is not None else league.my_roster_id
+        if roster_id is None:
+            raise ValueError("No team selected. Pick your team first.")
+
+        report = await asyncio.to_thread(
+            lambda: drop_engine.find_drops(
+                league, self.season_projections, my_roster_id=int(roster_id)
+            )
+        )
+        payload = report.as_dict()
+
+        ids: set[str] = set()
+        for row in payload["upgrades"] + payload["dead_weight"]:
+            ids.add(str(row["drop"]))
+            if row["add"]:
+                ids.add(str(row["add"]))
+            ids.update(str(p) for p in row["blocked_by"])
+        payload["players"] = self._player_rows(ids)
+        payload["my_roster_id"] = int(roster_id)
+        return payload
+
+    def _player_rows(self, ids: set[str]) -> dict[str, dict[str, Any]]:
+        """Display rows for a set of ids, so no page ever shows a raw id."""
+        assert self.season_projections is not None
+        frame = self.season_projections.frame
+        column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
+        indexed = frame.set_index(frame["sleeper_id"].astype(str))
+        rows: dict[str, dict[str, Any]] = {}
+        for pid in ids:
+            if pid in indexed.index:
+                row = indexed.loc[pid]
+                rows[pid] = {
+                    "sleeper_id": pid,
+                    "name": str(row.get("name") or pid),
+                    "position": str(row.get("position") or "?"),
+                    "team": None if pd.isna(row.get("team")) else str(row.get("team")),
+                    "ros_points": round(float(row.get(column) or 0.0), 1),
+                }
+            else:
+                meta = self.players.get(pid, {})
+                rows[pid] = {
+                    "sleeper_id": pid,
+                    "name": str(meta.get("full_name") or pid),
+                    "position": str(meta.get("position") or "?"),
+                    "team": meta.get("team"),
+                    "ros_points": 0.0,
+                }
+        return rows
 
     async def league_teams(self, week: int | None = None) -> dict[str, Any]:
         """Every team in the league with its lineup for the week."""

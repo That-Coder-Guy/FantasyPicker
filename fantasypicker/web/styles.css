@@ -316,6 +316,38 @@ table th.num-col { font-family: inherit; }
 .trade-chain-step { margin-left: .6rem; }
 .chain-step-label { font-size: .75rem; text-transform: uppercase; margin: .4rem 0 .2rem; }
 
+/* Drops ------------------------------------------------------------------- */
+.drop-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: .9rem 1rem; margin-bottom: .8rem; background: var(--panel-2);
+}
+/* Drop, arrow, add — one row, so the pairing reads as a single move rather
+ * than two separate suggestions stacked on top of each other. The arrow column
+ * is sized to its glyph so both sides get equal width, and the whole row is
+ * capped: stretched the width of a desktop card the two halves drift so far
+ * apart they stop reading as one swap. */
+.drop-swap {
+  display: grid; grid-template-columns: 1fr auto 1fr;
+  align-items: center; gap: .8rem; max-width: 40rem;
+}
+.drop-side h4 { margin: 0 0 .35rem; font-size: .8rem; text-transform: uppercase; color: var(--muted); }
+.drop-arrow { font-size: 1.3rem; line-height: 1; }
+.drop-player {
+  display: inline-flex; align-items: center; gap: .35rem; cursor: pointer;
+  padding: .2rem .4rem; border-radius: var(--radius);
+}
+.drop-player:hover { background: var(--panel); }
+.drop-gain { margin: .6rem 0 .2rem; font-size: .92rem; font-family: var(--mono); }
+@media (max-width: 700px) {
+  /* Stacked, the arrow points down the page instead of across it.
+   * justify-self is load-bearing: a stretched grid item is as wide as the
+   * column, and rotating that box swings the glyph — which sits at the start
+   * of the line, not its centre — a third of a card away from the swap it
+   * belongs to. Shrunk to its own width, the rotation pivots in place. */
+  .drop-swap { grid-template-columns: 1fr; gap: .3rem; }
+  .drop-arrow { justify-self: center; transform: rotate(90deg); }
+}
+
 /* Team avatars ------------------------------------------------------------ */
 .team-avatar {
   width: 24px; height: 24px; border-radius: 50%; overflow: hidden;

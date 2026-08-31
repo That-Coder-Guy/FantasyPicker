@@ -295,6 +295,15 @@ async def team_image(roster_id: int) -> Response:
     )
 
 
+@app.get("/api/drops")
+async def drops(roster_id: int | None = None) -> dict[str, Any]:
+    """Players worth dropping, paired with the free agent to add instead."""
+    try:
+        return await service.drops(roster_id=roster_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/trades")
 async def trades(
     roster_id: int | None = None,

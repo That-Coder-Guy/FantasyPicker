@@ -1233,3 +1233,107 @@ async def test_the_player_pool_is_not_called_when_picks_exist(monkeypatch):
     out = await source.draft_rosters(_League())
     assert asked["pool"] == 0
     assert out[1] == ["4034", "KC"]
+
+
+@pytest.mark.asyncio
+async def test_the_espn_source_reads_published_projections(monkeypatch):
+    """The number the rest of the league is looking at, from ESPN's own feed."""
+    from fantasypicker.platforms import EspnSource
+
+    def stats(total, average):
+        return [
+            {
+                "statSourceId": 1,
+                "statSplitTypeId": 0,
+                "seasonId": 2026,
+                "appliedTotal": total,
+                "appliedAverage": average,
+            }
+        ]
+
+    rosters = {
+        "teams": [
+            {
+                "roster": {
+                    "entries": [
+                        {
+                            "playerPoolEntry": {
+                                "player": {
+                                    "id": "3139477",
+                                    "fullName": "Rostered Player",
+                                    "defaultPositionId": 1,
+                                    "proTeamId": 1,
+                                    "stats": stats(300.0, 17.6),
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    pool = {
+        "players": [
+            {
+                "player": {
+                    "id": "4241457",
+                    "fullName": "Free Agent",
+                    "defaultPositionId": 2,
+                    "proTeamId": 2,
+                    "stats": stats(120.0, 7.1),
+                }
+            }
+        ]
+    }
+
+    asked: dict = {}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def rosters(self, league_id, season, week=None, *, fresh=False):
+            return rosters
+
+        async def player_pool(self, league_id, season, week=None, **kwargs):
+            asked.update(kwargs)
+            return pool
+
+    source = EspnSource(2026)
+    monkeypatch.setattr(source, "client", lambda: _Client())
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", lambda: crosswalk())
+
+    league, _ = await load_league(make_client({"mRoster": LEAGUE}), "999", 2026)
+    points = await source.published_projections(league)
+
+    # Rostered players and free agents alike, so both sides of a trade and the
+    # waiver fallback can be priced.
+    assert points["4034"].total == pytest.approx(300.0)
+    assert points["6794"].total == pytest.approx(120.0)
+    assert "FREEAGENT" in asked["statuses"]
+
+
+@pytest.mark.asyncio
+async def test_a_projection_fetch_failure_does_not_break_the_page(monkeypatch):
+    """A second opinion on how a trade looks is never worth a 500."""
+    from fantasypicker.platforms import EspnSource
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def rosters(self, *a, **k):
+            raise RuntimeError("ESPN is having a day")
+
+    source = EspnSource(2026)
+    monkeypatch.setattr(source, "client", lambda: _Client())
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", lambda: crosswalk())
+
+    league, _ = await load_league(make_client({"mRoster": LEAGUE}), "999", 2026)
+    assert await source.published_projections(league) == {}

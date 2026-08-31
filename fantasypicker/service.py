@@ -30,7 +30,7 @@ from .cache import FetchError
 from .config import get_settings
 from .data.crosswalk import Crosswalk, load_crosswalk, normalize_team
 from .data.nflverse import current_nfl_season
-from .data.rankings import load_expert_ranks
+from .data.rankings import load_expert_ranks, load_weekly_expert_points
 from .engine import draft as draft_engine
 from .engine import drops as drop_engine
 from .engine import league_view
@@ -47,6 +47,8 @@ from .model.predict import (
     project_week,
 )
 from .model.train import ProjectionModel, load_model, train_model
+from . import market as market_source
+from .market import MarketProjections
 from .credentials import EspnCredentials, load_credentials, save_credentials
 from .espn import league as espn_league
 from .espn.client import EspnAuthRequired
@@ -65,6 +67,11 @@ log = logging.getLogger(__name__)
 
 #: Sleeper is re-polled at most this often, however many requests arrive.
 REFRESH_INTERVAL = 30.0
+
+#: How old a consensus scrape may be before it is refused. Weekly projections
+#: are for one specific week, so a scrape from last month is not slightly
+#: stale — it is a different question's answer.
+CONSENSUS_MAX_AGE_DAYS = 10
 
 
 class NotReady(RuntimeError):
@@ -121,6 +128,11 @@ class PickerService:
     correlations: CorrelationModel | None = None
     season_projections: ProjectionSet | None = None
     weekly_projections: dict[int, ProjectionSet] = field(default_factory=dict)
+
+    #: What the rest of the league sees — the platform's own projected points.
+    #: Loaded lazily the first time a page needs to know how a trade *looks*,
+    #: and thrown away whenever the projections behind it are rebuilt.
+    market: MarketProjections | None = None
 
     #: Proxied team pictures, url -> (bytes, content_type). A league has at
     #: most a couple dozen small images; process-lifetime caching is plenty.
@@ -333,6 +345,7 @@ class PickerService:
             self.panel = None
             self.season_projections = None
             self.weekly_projections = {}
+            self.market = None
             self.status = LoadStatus(
                 stage="connected", detail=league.name, progress=0.05
             )
@@ -699,6 +712,8 @@ class PickerService:
             self.model = train_model(league.scoring, seasons=seasons, panel=self.panel)
 
         self._set_stage("Projecting the rest of the season", 0.85)
+        # Public projections are prorated against these, so they cannot outlive them.
+        self.market = None
         self.season_projections = project_season(
             self.model,
             self.panel,
@@ -959,6 +974,7 @@ class PickerService:
         if roster_id is None:
             raise ValueError("No team selected. Pick your team first.")
 
+        market = await self.market_projections()
         report = await asyncio.to_thread(
             lambda: trade_engine.find_trades(
                 league,
@@ -966,6 +982,7 @@ class PickerService:
                 my_roster_id=int(roster_id),
                 max_package=max_package,
                 chains=chains,
+                market=market,
             )
         )
         payload = report.as_dict()
@@ -987,30 +1004,7 @@ class PickerService:
                 collect(step["me"])
                 collect(step["them"])
 
-        frame = self.season_projections.frame
-        column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
-        indexed = frame.set_index(frame["sleeper_id"].astype(str))
-        players: dict[str, dict[str, Any]] = {}
-        for pid in ids:
-            if pid in indexed.index:
-                row = indexed.loc[pid]
-                players[pid] = {
-                    "sleeper_id": pid,
-                    "name": str(row.get("name") or pid),
-                    "position": str(row.get("position") or "?"),
-                    "team": None if pd.isna(row.get("team")) else str(row.get("team")),
-                    "ros_points": round(float(row.get(column) or 0.0), 1),
-                }
-            else:
-                meta = self.players.get(pid, {})
-                players[pid] = {
-                    "sleeper_id": pid,
-                    "name": str(meta.get("full_name") or pid),
-                    "position": str(meta.get("position") or "?"),
-                    "team": meta.get("team"),
-                    "ros_points": 0.0,
-                }
-        payload["players"] = players
+        payload["players"] = self._player_rows(ids, market)
         # Team pictures for the cards; the engine deals in ids and labels only.
         for trade in payload["trades"]:
             for side in (trade["me"], trade["them"]):
@@ -1052,8 +1046,110 @@ class PickerService:
         payload["my_roster_id"] = int(roster_id)
         return payload
 
-    def _player_rows(self, ids: set[str]) -> dict[str, dict[str, Any]]:
-        """Display rows for a set of ids, so no page ever shows a raw id."""
+    async def market_projections(self) -> MarketProjections:
+        """What the other managers see, loaded once and cached.
+
+        Three sources are tried in order of how closely they match the number
+        actually printed on the other manager's screen: the league's own
+        platform, then public consensus, then — admitting it — this app's own
+        model. The result is cached because it changes on the platform's
+        schedule (daily at most), not on ours.
+        """
+        if self.market is not None:
+            return self.market
+        assert self.season_projections is not None and self.league is not None
+
+        frame = self.season_projections.frame
+        column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
+        ids = frame["sleeper_id"].astype(str)
+        model_points = dict(zip(ids, frame[column].astype(float).fillna(0.0)))
+        # Byes and a mid-season start are already counted here, which is what
+        # puts a published season total onto a rest-of-season basis.
+        games = (
+            dict(zip(ids, frame["games"].astype(float)))
+            if "games" in frame.columns
+            else {pid: 1.0 for pid in ids}
+        )
+
+        published: dict[str, object] = {}
+        try:
+            published = await self.source.published_projections(self.league)
+        except Exception as exc:  # a second opinion is never worth a 500
+            log.warning("platform projections unavailable: %s", exc)
+
+        if published:
+            self.market = market_source.from_platform(
+                published,
+                games,
+                source=market_source.ESPN
+                if self.platform == "espn"
+                else self.platform.title(),
+                model_points=model_points,
+            )
+            return self.market
+
+        consensus = await asyncio.to_thread(self._consensus_projections, games)
+        if consensus is not None:
+            self.market = consensus
+            return self.market
+
+        self.market = market_source.from_model(
+            model_points,
+            notes=[
+                "No public projections were available for this league, so the "
+                "trade values below are this app's own model on both sides. "
+                "The other manager is looking at different numbers."
+            ],
+        )
+        return self.market
+
+    def _consensus_projections(
+        self, games: dict[str, float]
+    ) -> MarketProjections | None:
+        """FantasyPros' weekly consensus, for platforms that publish nothing.
+
+        Not the same numbers the other manager sees, but the same public
+        consensus most managers anchor to, which is far closer than our own
+        model. A stale scrape is refused outright: last season's weekly points
+        would price this season's rosters on games already played.
+        """
+        if self.crosswalk is None:
+            return None
+        try:
+            weekly = load_weekly_expert_points(self.crosswalk)
+        except Exception as exc:
+            log.info("consensus projections unavailable: %s", exc)
+            return None
+        if weekly.empty or "expert_points" not in weekly.columns:
+            return None
+
+        fresh = weekly["scrape_date"].max()
+        if pd.isna(fresh) or (pd.Timestamp.now() - fresh).days > CONSENSUS_MAX_AGE_DAYS:
+            log.info("consensus projections are stale (scraped %s), skipping", fresh)
+            return None
+
+        published: dict[str, object] = {}
+        for row in weekly.itertuples(index=False):
+            points = float(getattr(row, "expert_points", 0.0) or 0.0)
+            if points <= 0:
+                continue
+            published[str(row.sleeper_id)] = market_source.WeeklyRate(points)
+        if not published:
+            return None
+        return market_source.from_platform(
+            published, games, source=market_source.CONSENSUS
+        )
+
+    def _player_rows(
+        self, ids: set[str], market: MarketProjections | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Display rows for a set of ids, so no page ever shows a raw id.
+
+        With a ``market`` in hand each row also carries the public projection,
+        so a page can put the two numbers side by side. ``market_points`` is
+        None rather than zero when the source has nothing for that player —
+        "unknown" and "projected to score nothing" must not render alike.
+        """
         assert self.season_projections is not None
         frame = self.season_projections.frame
         column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
@@ -1078,6 +1174,11 @@ class PickerService:
                     "team": meta.get("team"),
                     "ros_points": 0.0,
                 }
+            rows[pid]["market_points"] = (
+                round(market.get(pid), 1)
+                if market is not None and market.available and market.covers(pid)
+                else None
+            )
         return rows
 
     async def league_teams(self, week: int | None = None) -> dict[str, Any]:

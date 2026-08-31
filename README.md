@@ -360,6 +360,49 @@ there later?*
 Live drafts sync from Sleeper's pick feed. Snake, linear, and third-round
 reversal are all handled.
 
+### Two currencies
+
+Every other manager in your league is deciding off one number: the projection
+their platform prints next to each player. It is not as good as this app's — if
+it were, there would be no edge to have — but it is the number in front of the
+person you are trying to trade with, and a proposal that reads as a fleece on
+*their* screen gets declined regardless of how sound it is on yours.
+
+So the app carries two valuations and never confuses them:
+
+| | Model points | Market points |
+| --- | --- | --- |
+| Source | This app's projections | The league's own platform |
+| Answers | Did this roster actually get better? | How does this look to them? |
+| Used for | Every gain, every lineup, every recommendation | The headline rule, the balance window, their perceived gain |
+
+Concretely: a trade is proposed only when it improves your lineup **on the
+model**, improves theirs **on the model**, *and* reads as a fair, improving
+deal **on the public numbers**. The third condition is new and it removes
+proposals that used to be made and never accepted. The Trades page shows both
+numbers against every player and totals each package in both, so you can see
+the gap you are trading into rather than taking it on faith.
+
+Where the public numbers come from, in descending order of how closely they
+match what the other manager sees:
+
+1. **The platform itself.** For ESPN this is exact — the same PROJ column, read
+   from the `stats` block on each player object (`statSourceId: 1` for a
+   projection, `statSplitTypeId: 0` for the season line), already computed
+   under your league's own scoring rules.
+2. **FantasyPros consensus**, for platforms that publish no projections through
+   their API — Sleeper among them. Not the same numbers, but the same public
+   consensus most managers are anchored to. A scrape more than ten days old is
+   refused rather than used stale.
+3. **Nothing**, in which case the model stands in for both, the page says so in
+   as many words, and the advice is exactly what it was before this existed.
+
+Platforms publish *season* totals while this app works in *rest-of-season*
+points, so market numbers are prorated by the games each player has left —
+byes included, since the projection frame already counts them. Before week 1
+the two bases coincide, so during a draft the number shown is exactly the total
+printed on the platform.
+
 ---
 
 ## The app
@@ -419,6 +462,17 @@ Eight tabs:
   When a two-step **chain** beats any single deal — trade for a receiver, and
   the receiver he benches becomes the piece a third team wants — it is laid
   out step by step, each step still fair to its own counterparty.
+
+  Every player carries **two numbers**, because the manager on the other end is
+  not looking at this app. They are looking at the projection ESPN prints, and
+  that is the only number in front of them when they decide. So the page shows
+  the public projection alongside the model's, and the engine keeps the two
+  jobs apart: model points decide whether a roster genuinely improved, and
+  public points decide whether the deal will be accepted — the headline rule,
+  the balance window, and the other side's perceived gain all run on their
+  numbers. A trade this app loves that reads as a fleece on espn.com is not a
+  good recommendation, it is a wasted proposal, and it no longer gets made. See
+  [Two currencies](#two-currencies) for where the public numbers come from.
 - **Model** — validation metrics, calibration, measured injury and correlation
   rates, and per-position feature importance. Everything above, checkable.
 
@@ -508,6 +562,12 @@ POST /api/retrain       rebuild from scratch
 Projection-backed routes answer **425 Too Early** with the current loading stage
 while the model trains, rather than blocking.
 
+`/api/trades` carries a `market` object naming where the public projections came
+from (`source`, `available`, `covered`), and every row in `players` carries both
+`ros_points` (the model) and `market_points` (the public number, `null` when
+that source has nothing for the player — which is deliberately distinct from a
+projection of zero).
+
 ---
 
 ## Limits worth knowing
@@ -522,6 +582,14 @@ while the model trains, rather than blocking.
   and by `fantasypicker doctor --espn`. Everything a weekly box score supports,
   including ESPN's banded milestones and per-position reception values, is
   translated exactly.
+
+- **Public trade values depend on the platform publishing them.** ESPN does, so
+  ESPN leagues get the exact numbers the other managers see. Sleeper does not
+  expose projections through its public API, so those leagues fall back to
+  FantasyPros consensus — close to what most managers are anchored to, but not
+  literally the figure on their screen — and to the model alone if no fresh
+  consensus scrape exists. The Trades page always names which of the three it
+  is using.
 
 - **Weekly fantasy football is mostly noise.** The model beats a rolling average
   by 10–14%. It will still tell you to start someone who scores three points.
@@ -549,7 +617,7 @@ while the model trains, rather than blocking.
 
 ```bash
 pip install -e ".[dev]"
-pytest                          # 168 tests, no network access required
+pytest                          # 325 tests, no network access required
 fantasypicker serve --reload
 ```
 
@@ -565,9 +633,11 @@ fantasypicker/
   sleeper/     API client, league shape, scoring rules
   data/        nflverse loaders, ID crosswalk, consensus rankings
   model/       panel construction, features, quantile training, prediction
+  espn/        API client, league translation, published projections
   engine/      simulator, correlations, lineups, draft, waivers, matchup,
-               league-wide team view
+               trades, drops, league-wide team view
   web/         the dashboard (no build step)
+  market.py    what the rest of the league sees, and where it came from
   service.py   the one object that holds a loaded league
   store.py     remembered leagues, per league, on disk
   api.py       HTTP routes

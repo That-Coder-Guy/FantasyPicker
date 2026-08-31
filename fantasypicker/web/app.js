@@ -1172,22 +1172,52 @@ async function loadDrops() {
 
 /* ----------------------------------------------------------------- trades */
 
-function tradePlayerChip(players, id) {
+function tradePlayerChip(players, id, marketLabel) {
   const info = players[id] || { name: id, position: "?", ros_points: 0 };
   const chip = el("span", "trade-player clickable");
   chip.append(posSpan(info.position));
-  chip.append(el("span", null, ` ${info.name} `));
-  chip.append(el("small", "muted", `${fmt(info.ros_points, 0)} ros`));
+  chip.append(el("span", "trade-name", ` ${info.name} `));
+  const points = el("span", "pts");
+  // The public number first: it is the one the other manager is looking at,
+  // and the one that decides whether this offer gets opened or declined.
+  if (info.market_points !== null && info.market_points !== undefined) {
+    const shown = el("span", "pts-market");
+    shown.textContent = fmt(info.market_points, 0);
+    shown.title = `${marketLabel} projection, rest of season`;
+    points.append(shown);
+    points.append(el("span", "pts-sep", "·"));
+  }
+  const ours = el("span", "pts-model");
+  ours.textContent = fmt(info.ros_points, 0);
+  ours.title = "This app's projection, rest of season";
+  points.append(ours);
+  chip.append(points);
   chip.addEventListener("click", () => openPlayer(id));
   return chip;
 }
 
-function tradeSideBlock(players, side, heading) {
+function sideTotals(players, ids) {
+  let market = 0;
+  let model = 0;
+  let covered = 0;
+  ids.forEach((id) => {
+    const info = players[id] || {};
+    model += Number(info.ros_points) || 0;
+    if (info.market_points !== null && info.market_points !== undefined) {
+      market += Number(info.market_points);
+      covered += 1;
+    }
+  });
+  return { market, model, complete: covered === ids.length && ids.length > 0 };
+}
+
+function tradeSideBlock(players, side, heading, marketLabel) {
   const block = el("div", "trade-side");
   block.append(el("h4", null, heading));
   const list = el("div", "trade-chips");
-  side.gives.forEach((id) => list.append(tradePlayerChip(players, id)));
+  side.gives.forEach((id) => list.append(tradePlayerChip(players, id, marketLabel)));
   block.append(list);
+
   if (side.adds.length) {
     const extra = el("p", "muted small");
     extra.textContent =
@@ -1202,10 +1232,48 @@ function tradeSideBlock(players, side, heading) {
       side.drops.map((id) => (players[id] || { name: id }).name).join(", ");
     block.append(extra);
   }
+
+  // The sum the other manager does in their head before replying. Last in the
+  // block so it closes off the package, knock-on moves included.
+  const totals = sideTotals(players, side.gives);
+  const line = el("p", "trade-total");
+  if (totals.complete) {
+    line.append(el("span", "pts-market", fmt(totals.market, 0)));
+    line.append(el("span", "pts-sep", "·"));
+  }
+  line.append(el("span", "pts-model", fmt(totals.model, 0)));
+  line.append(el("span", "muted small", " total"));
+  block.append(line);
   return block;
 }
 
-function tradeCard(players, trade) {
+/* Two numbers appear against every player, and which is which decides how the
+ * page should be read — so the key is stated once, at the top, rather than
+ * left to be inferred from colour. */
+function renderMarketKey(market) {
+  const box = $("trades-market-key");
+  box.innerHTML = "";
+  if (!market.available) {
+    box.append(
+      el(
+        "span",
+        "warn small",
+        "No public projections available for this league — both numbers below are this app's own model, " +
+          "so they are not what the other manager is looking at."
+      )
+    );
+    return;
+  }
+  // The key demonstrates itself: each label is set in the type its numbers use.
+  box.append(el("span", "pts-market", `${market.source} projection`));
+  box.append(el("span", "muted small", " — what they are looking at. "));
+  box.append(el("span", "pts-model", "This app's model"));
+  box.append(el("span", "muted small", " — what is actually true."));
+}
+
+function tradeCard(players, trade, market) {
+  const label = (market && market.source) || "public";
+  const hasMarket = Boolean(market && market.available);
   const card = el("div", "trade-card");
   const header = el("div", "trade-header");
   const who = el("span", "trade-with");
@@ -1218,8 +1286,8 @@ function tradeCard(players, trade) {
   card.append(header);
 
   const grid = el("div", "trade-grid");
-  grid.append(tradeSideBlock(players, trade.me, "You send"));
-  grid.append(tradeSideBlock(players, trade.them, "You receive"));
+  grid.append(tradeSideBlock(players, trade.me, "You send", label));
+  grid.append(tradeSideBlock(players, trade.them, "You receive", label));
   card.append(grid);
 
   const gains = el("p", "trade-gains");
@@ -1227,6 +1295,36 @@ function tradeCard(players, trade) {
   gains.append(el("span", "muted", " · "));
   gains.append(el("span", null, `${trade.them.label}: +${fmt(trade.them.gain, 1)}`));
   card.append(gains);
+
+  // What the other manager will conclude from their own screen. This is the
+  // number that decides whether the offer is accepted, so it is stated
+  // separately from what the trade is actually worth.
+  if (hasMarket) {
+    const seen = el("p", "trade-seen small");
+    seen.append(el("span", "muted", `How it looks on ${label}: `));
+    const gain = trade.them.perceived_gain;
+    seen.append(
+      el(
+        "span",
+        gain >= 0 ? "good" : "warn",
+        `their lineup ${gain >= 0 ? "+" : ""}${fmt(gain, 1)}`
+      )
+    );
+    // Balance is signed from their side, so name the beneficiary rather than
+    // printing a minus sign the reader has to work out the direction of.
+    seen.append(el("span", "muted", ", face value "));
+    seen.append(
+      el(
+        "span",
+        null,
+        `${fmt(Math.abs(trade.balance), 1)} ${
+          trade.balance >= 0 ? "in their favour" : "in yours"
+        }`
+      )
+    );
+    card.append(seen);
+  }
+
   card.append(el("p", "muted small", trade.rationale));
   return card;
 }
@@ -1247,7 +1345,11 @@ async function loadTrades() {
         el("p", "muted", "No trade clears the bar right now — nothing you want is available at a price the other side should take.")
       );
     }
-    data.trades.forEach((trade) => list.append(tradeCard(data.players, trade)));
+    const market = data.market || {};
+    renderMarketKey(market);
+    data.trades.forEach((trade) =>
+      list.append(tradeCard(data.players, trade, market))
+    );
 
     chainsCard.hidden = !data.chains.length;
     data.chains.forEach((chain, index) => {
@@ -1258,7 +1360,7 @@ async function loadTrades() {
       chain.steps.forEach((step, si) => {
         const stepWrap = el("div", "trade-chain-step");
         stepWrap.append(el("div", "chain-step-label muted", `Step ${si + 1}`));
-        stepWrap.append(tradeCard(data.players, step));
+        stepWrap.append(tradeCard(data.players, step, market));
         wrap.append(stepWrap);
       });
       chainsBox.append(wrap);

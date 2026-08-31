@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from fantasypicker.engine.trades import find_trades
+from fantasypicker.market import MarketProjections, from_model
 from fantasypicker.model.predict import ProjectionSet
 from fantasypicker.sleeper.league import Team
 
@@ -386,3 +387,204 @@ async def test_the_service_requires_a_team(scoring, monkeypatch):
     monkeypatch.setattr(PickerService, "refresh_live", no_refresh)
     with pytest.raises(ValueError, match="Pick your team"):
         await service.trades()
+
+
+# ------------------------------------------------------- two currencies
+
+# The other manager is not looking at this app. They are looking at the number
+# their platform prints, and that is the only number in front of them when they
+# decide. These tests pin down the split: gains stay on the model, but every
+# judgement about whether a deal will be *accepted* runs on the public numbers.
+
+
+def market_of(points: dict[str, float], source: str = "ESPN") -> MarketProjections:
+    return MarketProjections(points=points, source=source, available=True)
+
+
+def public_matching(projs: ProjectionSet) -> dict[str, float]:
+    """Public numbers identical to the model's, as a baseline to perturb."""
+    frame = projs.frame
+    return dict(zip(frame["sleeper_id"].astype(str), frame["exp_points"].astype(float)))
+
+
+def test_without_a_market_nothing_changes(scoring):
+    """No public source available is the old behaviour, exactly."""
+    league, projs = surplus_league(scoring)
+    plain = find_trades(league, projs, my_roster_id=1)
+    stand_in = find_trades(
+        league, projs, my_roster_id=1, market=from_model(public_matching(projs))
+    )
+    assert [t.key() for t in plain.trades] == [t.key() for t in stand_in.trades]
+
+
+def test_a_deal_that_looks_like_a_fleece_on_their_numbers_is_not_proposed(scoring):
+    """The point of the whole feature.
+
+    Our model says their WR3 is a stud. ESPN says he is replaceable, and rates
+    the running back we would send far higher. The lineup math still loves the
+    swap — but no manager accepts an offer that reads, on their own screen, as
+    handing over a starter for a bench body. It must not be recommended.
+    """
+    league, projs = surplus_league(scoring)
+    public = public_matching(projs)
+    # On ESPN's numbers the player we want is worth far more than anything we
+    # would send, so every package for him is an insult.
+    for wr in ("t_wr1", "t_wr2", "t_wr3", "t_wr4"):
+        public[wr] = 400.0
+    for rb in ("m_rb1", "m_rb2", "m_rb3", "m_rb4"):
+        public[rb] = 60.0
+
+    report = find_trades(league, projs, my_roster_id=1, market=market_of(public))
+    for trade in report.trades:
+        assert not any(p.startswith("t_wr") for p in trade.them.gives), (
+            "proposed a package that reads as a fleece on the other manager's "
+            f"own numbers: {trade.me.gives} for {trade.them.gives}"
+        )
+
+
+def test_a_deal_they_read_as_a_downgrade_is_not_proposed(scoring):
+    """They gain on our numbers, but their own screen says they got worse.
+
+    Nobody clicks accept on a trade their platform tells them is a loss, so
+    genuinely helping them is not on its own enough.
+    """
+    league, projs = surplus_league(scoring)
+    public = public_matching(projs)
+    # Publicly, the running backs we send are worthless — so on their screen
+    # every one of these deals lowers their projected total.
+    for rb in ("m_rb1", "m_rb2", "m_rb3", "m_rb4"):
+        public[rb] = 1.0
+    report = find_trades(league, projs, my_roster_id=1, market=market_of(public))
+    assert report.trades == []
+
+
+def test_gains_are_still_reported_on_the_model_not_the_market(scoring):
+    """Public numbers decide acceptance; they never decide what is true."""
+    league, projs = surplus_league(scoring)
+    baseline = find_trades(league, projs, my_roster_id=1).trades[0]
+
+    public = public_matching(projs)
+    for pid in public:
+        public[pid] = public[pid] * 0.5  # a source on a completely different scale
+    scaled = find_trades(league, projs, my_roster_id=1, market=market_of(public))
+
+    match = next(t for t in scaled.trades if t.key() == baseline.key())
+    assert match.me.gain == pytest.approx(baseline.me.gain)
+    assert match.them.gain == pytest.approx(baseline.them.gain)
+    # But the perceived gain is on their scale, so it is about half.
+    assert match.them.perceived_gain == pytest.approx(baseline.them.gain * 0.5, rel=0.2)
+
+
+def test_both_currencies_reach_the_payload(scoring):
+    league, projs = surplus_league(scoring)
+    public = public_matching(projs)
+    public["m_rb4"] = 999.0
+    report = find_trades(league, projs, my_roster_id=1, market=market_of(public))
+    assert report.trades
+    payload = report.as_dict()
+    assert payload["market"] == {
+        "source": "ESPN",
+        "available": True,
+        "covered": len(public),
+        "notes": [],
+    }
+    side = payload["trades"][0]["me"]
+    assert "market_value" in side and "model_value" in side
+    assert "perceived_gain" in payload["trades"][0]["them"]
+    assert "model_balance" in payload["trades"][0]
+
+
+def test_a_player_the_market_does_not_cover_keeps_his_model_value(scoring):
+    """A partially covered source must degrade player by player, never price
+    someone at zero — that would read as a free giveaway."""
+    league, projs = surplus_league(scoring)
+    public = public_matching(projs)
+    del public["m_rb4"]
+    report = find_trades(league, projs, my_roster_id=1, market=market_of(public))
+    # Unchanged from the fully covered case: the one missing player falls back.
+    full = find_trades(
+        league, projs, my_roster_id=1, market=market_of(public_matching(projs))
+    )
+    assert [t.key() for t in report.trades] == [t.key() for t in full.trades]
+
+
+def test_the_rationale_states_the_case_in_their_currency(scoring):
+    league, projs = surplus_league(scoring)
+    report = find_trades(
+        league, projs, my_roster_id=1, market=market_of(public_matching(projs))
+    )
+    assert report.trades
+    assert "ESPN projections" in report.trades[0].rationale
+
+
+def test_market_notes_are_carried_into_the_report(scoring):
+    league, projs = surplus_league(scoring)
+    market = MarketProjections(
+        points=public_matching(projs),
+        source="ESPN",
+        available=True,
+        notes=["3 players have no ESPN projection."],
+    )
+    report = find_trades(league, projs, my_roster_id=1, market=market)
+    assert "3 players have no ESPN projection." in report.notes
+
+
+@pytest.mark.asyncio
+async def test_the_service_puts_both_numbers_on_every_player(scoring, monkeypatch):
+    """The page has to be able to show what they see next to what is true."""
+    from fantasypicker.service import PickerService
+
+    league, projs = surplus_league(scoring)
+    league.my_roster_id = 1
+    service = PickerService()
+    service.league = league
+    service.season_projections = projs
+    service.model = object()
+    service.panel = object()
+
+    public = public_matching(projs)
+    public["m_rb4"] = 250.0  # publicly overrated, which is why he is tradeable
+    service.market = market_of(public)
+
+    async def no_refresh(self, *, force=False):
+        return {"rosters": False, "players": False}
+
+    monkeypatch.setattr(PickerService, "refresh_live", no_refresh)
+    payload = await service.trades()
+
+    assert payload["market"]["source"] == "ESPN"
+    assert payload["market"]["available"] is True
+    assert payload["trades"]
+    for trade in payload["trades"]:
+        for pid in trade["me"]["gives"] + trade["them"]["gives"]:
+            row = payload["players"][pid]
+            assert row["market_points"] is not None, pid
+            assert row["ros_points"] is not None
+    assert payload["players"]["m_rb4"]["market_points"] == pytest.approx(250.0)
+
+
+@pytest.mark.asyncio
+async def test_market_points_are_absent_rather_than_zero_when_unknown(
+    scoring, monkeypatch
+):
+    """"Unknown" and "projected to score nothing" must not render alike."""
+    from fantasypicker.service import PickerService
+
+    league, projs = surplus_league(scoring)
+    league.my_roster_id = 1
+    service = PickerService()
+    service.league = league
+    service.season_projections = projs
+    service.model = object()
+    service.panel = object()
+    service.market = from_model(public_matching(projs))  # stand-in, not public
+
+    async def no_refresh(self, *, force=False):
+        return {"rosters": False, "players": False}
+
+    monkeypatch.setattr(PickerService, "refresh_live", no_refresh)
+    payload = await service.trades()
+
+    assert payload["market"]["available"] is False
+    for row in payload["players"].values():
+        assert row["market_points"] is None

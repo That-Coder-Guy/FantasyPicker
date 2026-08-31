@@ -22,6 +22,26 @@ is organised around it:
   trades their best player for a pile of parts whose headline is smaller than
   what they gave, however well the pile fits. Both filters have to pass.
 
+Two currencies
+--------------
+The other manager is not looking at this app. They are looking at the
+projection their platform prints, and that is the only number in front of them
+when they decide. So the engine keeps two valuations and never mixes them up:
+
+* **Model points** decide whether a roster genuinely improved. Every gain
+  reported to you is in this currency, because it is the accurate one.
+* **Market points** — the platform's own published projections — decide whether
+  the deal *looks* fair, and whether the other side believes they are gaining.
+  Every acceptance test runs here: the headline rule, the balance window, and
+  their perceived gain.
+
+That split is the difference between a trade that is good and a trade that gets
+accepted. A deal our model loves but which reads as a fleece on espn.com is not
+a good recommendation, it is a wasted proposal; with both currencies in hand
+the engine can decline to suggest it. When no public projections are available
+the market currency falls back to the model's and the behaviour is exactly what
+it was before — no worse, just less informed.
+
 **Chains** exist because the best first trade can unlock a second one. Acquire
 a starting receiver and your old WR2 becomes surplus — a piece some third team
 wants more than you do, and that yesterday you could not spare. The chain
@@ -41,6 +61,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ..market import MarketProjections
 from ..model.predict import ProjectionSet
 from ..sleeper.league import LeagueContext
 from .lineup import solve_assignment
@@ -86,6 +107,14 @@ class TradeSide:
     #: Forced knock-on moves that the gain already includes.
     adds: list[str] = field(default_factory=list)
     drops: list[str] = field(default_factory=list)
+    #: What this side's package is worth on the public projections — the total
+    #: the other manager adds up when deciding whether the offer is insulting.
+    market_value: float = 0.0
+    #: The same package on this app's numbers, for the side-by-side.
+    model_value: float = 0.0
+    #: What this side's lineup gains as *they* would compute it, on public
+    #: numbers. Differs from ``gain``, which is what they actually get.
+    perceived_gain: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -95,6 +124,9 @@ class TradeSide:
             "gain": round(self.gain, 1),
             "adds": list(self.adds),
             "drops": list(self.drops),
+            "market_value": round(self.market_value, 1),
+            "model_value": round(self.model_value, 1),
+            "perceived_gain": round(self.perceived_gain, 1),
         }
 
 
@@ -111,9 +143,13 @@ class Trade:
     #: biggest heist is worse than a slightly smaller trade that gets accepted.
     expected: float
     #: Perceived-value balance from their side: received minus given, in
-    #: rest-of-season points. Near zero reads as a fair deal.
+    #: *public* rest-of-season points. Near zero reads as a fair deal on the
+    #: numbers they are actually looking at.
     balance: float
     rationale: str
+    #: The same balance on this app's numbers. Where the two disagree sharply,
+    #: the deal is an arbitrage: fair on their screen, a win on ours.
+    model_balance: float = 0.0
 
     @property
     def my_gain(self) -> float:
@@ -134,6 +170,7 @@ class Trade:
             "likelihood": self.likelihood,
             "expected": round(self.expected, 1),
             "balance": round(self.balance, 1),
+            "model_balance": round(self.model_balance, 1),
             "rationale": self.rationale,
         }
 
@@ -155,12 +192,16 @@ class TradeReport:
     trades: list[Trade]
     chains: list[TradeChain] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: Where the public numbers came from, so the page can name the source
+    #: rather than presenting two columns of unexplained points.
+    market: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         return {
             "trades": [t.as_dict() for t in self.trades],
             "chains": [c.as_dict() for c in self.chains],
             "notes": list(self.notes),
+            "market": dict(self.market),
         }
 
 
@@ -172,14 +213,30 @@ class RosterEvaluator:
     alone.
     """
 
-    def __init__(self, league: LeagueContext, projections: ProjectionSet) -> None:
+    def __init__(
+        self,
+        league: LeagueContext,
+        projections: ProjectionSet,
+        *,
+        values: dict[str, float] | None = None,
+    ) -> None:
         self.league = league
         self.slots = league.slots
         frame = projections.frame
         column = "exp_points" if "exp_points" in frame.columns else "proj_mean"
         ids = frame["sleeper_id"].astype(str)
-        self.value: dict[str, float] = dict(
+        model_value: dict[str, float] = dict(
             zip(ids, frame[column].astype(float).fillna(0.0))
+        )
+        # ``values`` overrides what a player is worth without changing who
+        # exists: a market-currency evaluator prices the same roster, in the
+        # same slots, on the numbers the rest of the league can see. Anyone the
+        # override misses keeps his model value, so a partially covered source
+        # degrades player by player instead of pricing him at zero.
+        self.value: dict[str, float] = (
+            {pid: values.get(pid, model_value[pid]) for pid in model_value}
+            if values is not None
+            else model_value
         )
         self.position: dict[str, str] = dict(zip(ids, frame["position"].astype(str)))
         self._cache: dict[frozenset, float] = {}
@@ -291,6 +348,20 @@ def _packages(candidates: list[str], max_package: int) -> list[tuple[str, ...]]:
     return out
 
 
+@dataclass
+class _Outcome:
+    """Both rosters after one package, and what each side made on it."""
+
+    my_gain: float
+    their_gain: float
+    my_adds: list[str]
+    my_drops: list[str]
+    their_adds: list[str]
+    their_drops: list[str]
+    my_after: frozenset
+    their_after: frozenset
+
+
 def _evaluate(
     evaluator: RosterEvaluator,
     my_players: frozenset,
@@ -299,7 +370,7 @@ def _evaluate(
     get: tuple[str, ...],
     *,
     taken: frozenset = frozenset(),
-) -> tuple[float, float, list[str], list[str], list[str], list[str], frozenset]:
+) -> _Outcome:
     """Both sides' exact gains for one package, knock-on moves included."""
     my_after = (my_players - set(give)) | set(get)
     their_after = (their_players - set(get)) | set(give)
@@ -311,9 +382,17 @@ def _evaluate(
         their_after, len(their_players), taken | my_after
     )
 
-    my_gain = evaluator.team_value(my_after) - evaluator.team_value(my_players)
-    their_gain = evaluator.team_value(their_after) - evaluator.team_value(their_players)
-    return my_gain, their_gain, my_adds, my_drops, their_adds, their_drops, my_after
+    return _Outcome(
+        my_gain=evaluator.team_value(my_after) - evaluator.team_value(my_players),
+        their_gain=evaluator.team_value(their_after)
+        - evaluator.team_value(their_players),
+        my_adds=my_adds,
+        my_drops=my_drops,
+        their_adds=their_adds,
+        their_drops=their_drops,
+        my_after=my_after,
+        their_after=their_after,
+    )
 
 
 def _effective(values: list[float]) -> float:
@@ -324,23 +403,26 @@ def _effective(values: list[float]) -> float:
     return ordered[0] + PACKAGE_DISCOUNT * sum(ordered[1:])
 
 
-def _appeal(their_gain: float, balance: float) -> str:
-    if their_gain >= 2.5 and balance >= -1.0:
+def _appeal(perceived_gain: float, balance: float) -> str:
+    """How the offer reads to them — so, in the currency they read it in."""
+    if perceived_gain >= 2.5 and balance >= -1.0:
         return "clear win for them"
-    if their_gain >= 1.0:
+    if perceived_gain >= 1.0:
         return "solid for them"
     return "slight edge for them"
 
 
-def _likelihood(their_gain: float, balance: float) -> tuple[str, float]:
+def _likelihood(perceived_gain: float, balance: float) -> tuple[str, float]:
     """Would they actually click accept?
 
-    Their lineup gain is what a sharp manager checks; the perceived balance is
-    what everyone else checks. Both feed one score, and the returned weight
-    turns my gain into an expected value — a +8 trade accepted half the time
-    beats a +15 heist that gets laughed out of the league chat.
+    Both inputs are in the currency they can see. The perceived lineup gain is
+    what a sharp manager checks — on their platform's projections, not ours —
+    and the perceived balance is what everyone else checks. Both feed one
+    score, and the returned weight turns my gain into an expected value: a +8
+    trade accepted half the time beats a +15 heist that gets laughed out of the
+    league chat.
     """
-    score = their_gain + 0.15 * balance
+    score = perceived_gain + 0.15 * balance
     if score >= 2.5:
         return "likely", 0.75
     if score >= 0.8:
@@ -360,12 +442,23 @@ def _rationale(
     their_gain: float,
     my_adds: list[str],
     their_drops: list[str],
+    *,
+    market_source: str | None = None,
+    give_market: float = 0.0,
+    get_market: float = 0.0,
 ) -> str:
     bits = [
         f"You send {_positions(evaluator, give)} for {_positions(evaluator, get)}: "
         f"your best lineup gains {my_gain:+.1f} rest-of-season points, "
         f"theirs gains {their_gain:+.1f} — it fits both rosters."
     ]
+    # The half of the pitch that survives contact with the other manager: what
+    # the deal totals on the projections they are looking at.
+    if market_source:
+        bits.append(
+            f"On {market_source} projections they receive {give_market:.0f} points "
+            f"and send {get_market:.0f}, so it reads as fair from their side."
+        )
     if len(give) > len(get):
         bits.append("Consolidating two spots into one lets you add off waivers.")
     elif len(get) > len(give):
@@ -389,11 +482,20 @@ def _search_pair(
     min_their_gain: float,
     my_label: str,
     taken: frozenset = frozenset(),
+    market: RosterEvaluator | None = None,
+    market_source: str | None = None,
 ) -> list[Trade]:
-    """Every acceptable package between one pair of rosters."""
+    """Every acceptable package between one pair of rosters.
+
+    ``evaluator`` prices rosters on the model — that decides whether a trade is
+    *good*. ``market`` prices the same rosters on the public projections — that
+    decides whether it will be *accepted*. When no public source is available
+    the two are the same object and this behaves as it always did.
+    """
     their_players = frozenset(str(p) for p in their_team.players)
     if not their_players:
         return []
+    seen_by_them = market or evaluator
     mine = _candidates(evaluator, my_players, limit=candidate_limit)
     theirs = _candidates(evaluator, their_players, limit=candidate_limit)
     if not mine or not theirs:
@@ -401,53 +503,91 @@ def _search_pair(
 
     trades: list[Trade] = []
     for give in _packages(mine, max_package):
-        give_eff = _effective([evaluator.value[p] for p in give])
-        my_headliner = max(evaluator.value[p] for p in give)
+        # Every perceived-value test below is in the public currency, because
+        # face value is exactly the thing this app sees differently from the
+        # person being asked to say yes.
+        give_eff = _effective([seen_by_them.value[p] for p in give])
+        my_headliner = max(seen_by_them.value[p] for p in give)
         for get in _packages(theirs, max_package):
-            get_eff = _effective([evaluator.value[p] for p in get])
+            get_eff = _effective([seen_by_them.value[p] for p in get])
             top = max(give_eff, get_eff)
             if top > 0 and abs(give_eff - get_eff) > BALANCE_WINDOW * top:
-                continue  # too lopsided on perceived value to ever be accepted
+                continue  # too lopsided on their numbers to ever be accepted
             # Headline rule from their side: what they receive must roughly
             # match the best player they surrender.
-            their_headliner = max(evaluator.value[p] for p in get)
+            their_headliner = max(seen_by_them.value[p] for p in get)
             if give_eff < their_headliner * HEADLINE_FACTOR:
                 continue
             # And from mine, so we never propose donating our own star.
             if get_eff < my_headliner * HEADLINE_FACTOR:
                 continue
 
-            my_gain, their_gain, my_adds, my_drops, their_adds, their_drops, _ = (
-                _evaluate(evaluator, my_players, their_players, give, get, taken=taken)
+            outcome = _evaluate(
+                evaluator, my_players, their_players, give, get, taken=taken
             )
-            if my_gain < min_my_gain or their_gain < min_their_gain:
+            if outcome.my_gain < min_my_gain or outcome.their_gain < min_their_gain:
                 continue
+
+            # What they will compute for themselves, on the rosters this trade
+            # actually produces. The knock-on moves are taken as settled above
+            # rather than re-solved in the other currency: the question here is
+            # how this specific deal scores on their screen, not what a
+            # differently-informed manager would have done with the waiver wire.
+            if market is None:
+                perceived_gain = outcome.their_gain
+            else:
+                perceived_gain = market.team_value(
+                    outcome.their_after
+                ) - market.team_value(their_players)
+            # An offer they read as a downgrade is not a trade, whatever our
+            # numbers say about it.
+            if perceived_gain < min_their_gain:
+                continue
+
             balance = give_eff - get_eff
-            likelihood, weight = _likelihood(their_gain, balance)
+            model_balance = _effective(
+                [evaluator.value[p] for p in give]
+            ) - _effective([evaluator.value[p] for p in get])
+            likelihood, weight = _likelihood(perceived_gain, balance)
             trades.append(
                 Trade(
                     me=TradeSide(
                         roster_id=my_id,
                         label=my_label,
                         gives=list(give),
-                        gain=my_gain,
-                        adds=my_adds,
-                        drops=my_drops,
+                        gain=outcome.my_gain,
+                        adds=outcome.my_adds,
+                        drops=outcome.my_drops,
+                        market_value=sum(seen_by_them.value[p] for p in give),
+                        model_value=sum(evaluator.value[p] for p in give),
                     ),
                     them=TradeSide(
                         roster_id=their_team.roster_id,
                         label=their_team.label,
                         gives=list(get),
-                        gain=their_gain,
-                        adds=their_adds,
-                        drops=their_drops,
+                        gain=outcome.their_gain,
+                        adds=outcome.their_adds,
+                        drops=outcome.their_drops,
+                        market_value=sum(seen_by_them.value[p] for p in get),
+                        model_value=sum(evaluator.value[p] for p in get),
+                        perceived_gain=perceived_gain,
                     ),
-                    appeal=_appeal(their_gain, balance),
+                    appeal=_appeal(perceived_gain, balance),
                     likelihood=likelihood,
-                    expected=my_gain * weight,
+                    expected=outcome.my_gain * weight,
                     balance=balance,
+                    model_balance=model_balance,
                     rationale=_rationale(
-                        evaluator, give, get, my_gain, their_gain, my_adds, their_drops
+                        evaluator,
+                        give,
+                        get,
+                        outcome.my_gain,
+                        outcome.their_gain,
+                        outcome.my_adds,
+                        outcome.their_drops,
+                        market_source=market_source,
+                        give_market=sum(seen_by_them.value[p] for p in give),
+                        get_market=sum(seen_by_them.value[p] for p in get),
                     ),
                 )
             )
@@ -488,8 +628,14 @@ def find_trades(
     candidate_limit: int = 9,
     limit: int = 12,
     chains: bool = True,
+    market: MarketProjections | None = None,
 ) -> TradeReport:
-    """Rank mutually beneficial trades, and chains of them, for one roster."""
+    """Rank mutually beneficial trades, and chains of them, for one roster.
+
+    ``market`` supplies the projections the rest of the league is looking at.
+    Pass none and every judgement falls back to the model, which is what this
+    engine did before the distinction existed.
+    """
     if season_projections.frame.empty:
         return TradeReport([], [], ["No projections available."])
     my_team = league.teams.get(int(my_roster_id))
@@ -502,6 +648,13 @@ def find_trades(
         )
 
     evaluator = RosterEvaluator(league, season_projections)
+    market_evaluator: RosterEvaluator | None = None
+    market_source: str | None = None
+    if market is not None and market.available:
+        market_evaluator = RosterEvaluator(
+            league, season_projections, values=market.points
+        )
+        market_source = market.source
     opponents = [
         t for rid, t in sorted(league.teams.items()) if rid != int(my_roster_id)
     ]
@@ -519,6 +672,8 @@ def find_trades(
                 min_my_gain=MIN_MY_GAIN,
                 min_their_gain=MIN_THEIR_GAIN,
                 my_label=my_team.label,
+                market=market_evaluator,
+                market_source=market_source,
             )
         )
 
@@ -534,6 +689,8 @@ def find_trades(
             my_players,
             ranked,
             max_package=max_package,
+            market=market_evaluator,
+            market_source=market_source,
         )
 
     notes: list[str] = []
@@ -549,7 +706,14 @@ def find_trades(
             "either hurts the other roster or asks them to give up more face "
             "value than they get back."
         )
-    return TradeReport(ranked[:limit], chain_results, notes)
+    if market is not None:
+        notes.extend(market.notes)
+    return TradeReport(
+        ranked[:limit],
+        chain_results,
+        notes,
+        market=market.as_dict() if market is not None else {},
+    )
 
 
 def _find_chains(
@@ -563,6 +727,8 @@ def _find_chains(
     max_package: int,
     seeds: int = 5,
     limit: int = 3,
+    market: RosterEvaluator | None = None,
+    market_source: str | None = None,
 ) -> list[TradeChain]:
     """Two-step sequences that beat the best single trade.
 
@@ -578,9 +744,9 @@ def _find_chains(
         get = tuple(seed.them.gives)
         their_team = league.teams[seed.them.roster_id]
         their_players = frozenset(str(p) for p in their_team.players)
-        _, _, _, _, _, _, after = _evaluate(
+        after = _evaluate(
             evaluator, my_players, their_players, give, get
-        )
+        ).my_after
         # Players the first step routed elsewhere are spoken for.
         taken = frozenset(give) | frozenset(seed.them.adds) | frozenset(seed.me.adds)
 
@@ -600,6 +766,8 @@ def _find_chains(
                 min_their_gain=MIN_THEIR_GAIN,
                 my_label=my_label,
                 taken=taken,
+                market=market,
+                market_source=market_source,
             )
             followups.sort(key=lambda t: -t.expected)
             for follow in followups[:1]:

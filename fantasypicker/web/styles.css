@@ -304,12 +304,32 @@ table th.num-col { font-family: inherit; }
 @media (max-width: 700px) { .trade-grid { grid-template-columns: 1fr; } }
 .trade-side h4 { margin: 0 0 .35rem; font-size: .8rem; text-transform: uppercase; color: var(--muted); }
 .trade-chips { display: flex; flex-direction: column; gap: .3rem; }
+/* Full-width rather than inline: the two projections align in a column down
+ * the right of the package, which is how you compare them. */
 .trade-player {
-  display: inline-flex; align-items: center; gap: .35rem; cursor: pointer;
+  display: flex; align-items: center; gap: .35rem; cursor: pointer;
   padding: .2rem .4rem; border-radius: var(--radius);
 }
 .trade-player:hover { background: var(--panel); }
 .trade-gains { margin: .3rem 0 .2rem; font-size: .92rem; }
+.trade-seen { margin: .1rem 0 .3rem; }
+
+/* Two currencies, told apart at a glance -----------------------------------
+ * The public projection is the number the trade will be judged on, so it leads
+ * and carries the accent; ours follows in muted type. Both are monospaced and
+ * the same size, because the point of the pairing is comparing them. */
+.trade-name { flex: 1; min-width: 0; }
+.pts { font-family: var(--mono); font-size: .78rem; white-space: nowrap; flex: none; }
+.pts-market { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+.pts-model { font-family: var(--mono); color: var(--muted); }
+.pts-sep { color: var(--line); margin: 0 .3rem; }
+.trade-total {
+  margin: .35rem 0 0; padding-top: .3rem; border-top: 1px solid var(--line);
+  font-size: .8rem;
+}
+.market-key { padding: .5rem .8rem; margin-bottom: .8rem; }
+.market-key .pts-market, .market-key .pts-model { font-size: .78rem; }
+.warn { color: var(--warn); }
 .good { color: var(--good); font-weight: 600; }
 .trade-chain { border-top: 1px solid var(--line); padding-top: .6rem; margin-top: .6rem; }
 .trade-chain:first-child { border-top: none; margin-top: 0; padding-top: 0; }

@@ -24,6 +24,7 @@ from typing import Protocol
 
 from .credentials import EspnCredentials
 from .espn import league as espn_league
+from .espn import projections as espn_projections
 from .espn.client import EspnClient
 from .espn.ids import dst_team_from_player_id, is_unmade_pick
 from .sleeper.client import SleeperClient
@@ -51,6 +52,14 @@ class LeagueSource(Protocol):
 
     async def draft_rosters(self, league: LeagueContext) -> dict[int, list[str]]:
         """roster_id -> the players that roster has drafted so far."""
+
+    async def published_projections(self, league: LeagueContext) -> dict[str, object]:
+        """The platform's own projected points, as the league's members see them.
+
+        Keyed by Sleeper ID, valued by anything carrying ``total`` and
+        ``per_game``. Empty when the platform publishes nothing — a normal
+        answer, not a failure.
+        """
 
 
 class SleeperSource:
@@ -98,6 +107,14 @@ class SleeperSource:
             except (TypeError, ValueError):
                 continue
         return out
+
+    async def published_projections(self, league: LeagueContext) -> dict[str, object]:
+        """Sleeper publishes no projections on its public API.
+
+        Its app shows them, but they are not in the documented endpoints this
+        client uses, so the caller falls back to a public consensus source.
+        """
+        return {}
 
 
 class EspnSource:
@@ -199,6 +216,43 @@ class EspnSource:
         draft_obj, _ = _espn_draft(payload, league)
         order = (draft_obj or {}).get("draft_order") or {}
         return {str(k): int(v) for k, v in order.items()}
+
+    async def published_projections(self, league: LeagueContext) -> dict[str, object]:
+        """ESPN's own PROJ numbers — exactly what the league's members see.
+
+        The player pool covers rostered and unrostered players in one request;
+        the roster payload is merged underneath it because it is fetched anyway
+        and, during a live draft, is sometimes the fuller of the two.
+
+        Failures here are logged and swallowed. This is a second opinion on how
+        a trade *looks*, not something any recommendation depends on, and
+        losing the Trades page over it would be a bad trade in itself.
+        """
+        try:
+            async with self.client() as client:
+                rosters = await client.rosters(
+                    league.league_id, self.season, league.current_week
+                )
+                pool = await client.player_pool(
+                    league.league_id,
+                    self.season,
+                    league.current_week,
+                    statuses=("FREEAGENT", "WAIVERS", "ONTEAM"),
+                    limit=600,
+                )
+        except Exception as exc:
+            log.warning("could not read ESPN's published projections: %s", exc)
+            return {}
+
+        crosswalk = _crosswalk()
+        points: dict[str, object] = dict(
+            espn_projections.from_rosters(rosters, crosswalk, season=self.season)
+        )
+        points.update(
+            espn_projections.from_player_pool(pool, crosswalk, season=self.season)
+        )
+        log.info("read ESPN projections for %d players", len(points))
+        return points
 
 
 def picks_by_roster(picks: list[dict]) -> dict[int, list[str]]:

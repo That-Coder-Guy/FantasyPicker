@@ -223,7 +223,7 @@ def rosters_from_player_pool(
         position = position_of(player.get("defaultPositionId"))
         sleeper_id = crosswalk.from_espn(
             player.get("id") or row.get("id"),
-            name=_entry_name(player),
+            name=entry_name(player),
             position=position or "",
             team=team_of(player.get("proTeamId")),
         )
@@ -249,7 +249,7 @@ def raw_entry_counts(payload: dict | None) -> dict[int, int]:
     return out
 
 
-def _entry_player(entry: dict) -> dict:
+def entry_player(entry: dict) -> dict:
     """The player object on a roster entry, wherever ESPN put it.
 
     Depending on the view, the player rides at ``playerPoolEntry.player`` or
@@ -268,7 +268,7 @@ def _entry_espn_id(entry: dict, player: dict) -> object:
     return player.get("id") or entry.get("playerId")
 
 
-def _entry_name(player: dict) -> str:
+def entry_name(player: dict) -> str:
     name = str(player.get("fullName") or "").strip()
     if name:
         return name
@@ -280,7 +280,7 @@ def _entry_name(player: dict) -> str:
 
 
 def _resolve_entry(entry: dict, crosswalk: Crosswalk) -> tuple[str, str] | None:
-    player = _entry_player(entry)
+    player = entry_player(entry)
     espn_id = _entry_espn_id(entry, player)
     if not espn_id and not player:
         return None
@@ -288,7 +288,7 @@ def _resolve_entry(entry: dict, crosswalk: Crosswalk) -> tuple[str, str] | None:
     team = team_of(player.get("proTeamId"))
     sleeper_id = crosswalk.from_espn(
         espn_id,
-        name=_entry_name(player),
+        name=entry_name(player),
         position=position or "",
         team=team,
     )
@@ -306,9 +306,9 @@ def _entry_description(entry: dict) -> dict | None:
     list, which showed up as a team with zero players and nothing to explain
     why. An ESPN id alone is enough to report.
     """
-    player = _entry_player(entry)
+    player = entry_player(entry)
     espn_id = _entry_espn_id(entry, player)
-    name = _entry_name(player)
+    name = entry_name(player)
     if not espn_id and not name:
         return None
     return {
@@ -329,11 +329,11 @@ def injury_map(payload: dict | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for row in (payload or {}).get("teams") or []:
         for entry in ((row.get("roster") or {}).get("entries") or []):
-            player = _entry_player(entry)
+            player = entry_player(entry)
             position = position_of(player.get("defaultPositionId"))
             sleeper_id = crosswalk.from_espn(
                 _entry_espn_id(entry, player),
-                name=_entry_name(player),
+                name=entry_name(player),
                 position=position or "",
                 team=team_of(player.get("proTeamId")),
             )

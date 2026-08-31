@@ -1103,3 +1103,133 @@ def test_unmade_picks_are_skipped_when_rebuilding_rosters(monkeypatch):
     _, picks = _espn_draft(payload, _League())
     assert len(picks) == 1
     assert picks_by_roster(picks) == {1: ["4034"]}
+
+
+# ------------------------------------------ the player pool as a live fallback
+
+
+POOL = {
+    "players": [
+        {
+            "id": 3139477,
+            "onTeamId": 1,
+            "player": {
+                "id": 3139477, "fullName": "Patrick Mahomes",
+                "defaultPositionId": 1, "proTeamId": 12,
+            },
+        },
+        {
+            "id": 4241457,
+            "onTeamId": 2,
+            "player": {
+                "id": 4241457, "fullName": "Bench Guy",
+                "defaultPositionId": 3, "proTeamId": 4,
+            },
+        },
+        {   # a free agent: owned by nobody, must not land on a roster
+            "id": 999999,
+            "onTeamId": 0,
+            "player": {
+                "id": 999999, "fullName": "Free Agent",
+                "defaultPositionId": 2, "proTeamId": 9,
+            },
+        },
+    ]
+}
+
+
+def test_the_player_pool_rebuilds_rosters_from_who_owns_whom():
+    """A path to rosters that reads neither the roster view nor the draft
+    feed — the only one left when ESPN publishes no picks mid-draft."""
+    from fantasypicker.espn.league import rosters_from_player_pool
+
+    out = rosters_from_player_pool(POOL, crosswalk())
+    assert out == {1: ["4034"], 2: ["6794"]}
+
+
+def test_free_agents_are_not_assigned_to_a_team():
+    from fantasypicker.espn.league import rosters_from_player_pool
+
+    assert rosters_from_player_pool({"players": []}, crosswalk()) == {}
+    assert rosters_from_player_pool(None, crosswalk()) == {}
+
+
+@pytest.mark.asyncio
+async def test_draft_rosters_falls_back_to_the_player_pool(monkeypatch):
+    """When the draft board is allocated but no picks are published, the
+    player pool is tried before reporting an empty league."""
+    from fantasypicker.platforms import EspnSource
+
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", crosswalk)
+    unmade = json.loads(json.dumps(DRAFT_PAYLOAD))
+    unmade["draftDetail"]["picks"] = [
+        {"teamId": 1, "playerId": -1, "overallPickNumber": 1},
+    ]
+    asked = {"pool": 0}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def draft(self, league_id, season, *, fresh=False):
+            return unmade
+
+        async def player_pool(self, league_id, season, week=None, **kw):
+            asked["pool"] += 1
+            return POOL
+
+    source = EspnSource(2026)
+    monkeypatch.setattr(source, "client", lambda: _Client())
+
+    class _League:
+        league_id = "999"
+        current_week = 1
+        roster_size = 9
+        teams = {}
+
+    out = await source.draft_rosters(_League())
+    assert asked["pool"] == 1
+    assert out == {1: ["4034"], 2: ["6794"]}
+
+
+@pytest.mark.asyncio
+async def test_the_player_pool_is_not_called_when_picks_exist(monkeypatch):
+    """One source is enough; do not spend a second call proving it."""
+    from fantasypicker.platforms import EspnSource
+    from fantasypicker.sleeper.league import Team
+
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", crosswalk)
+    asked = {"pool": 0}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def draft(self, league_id, season, *, fresh=False):
+            return DRAFT_PAYLOAD
+
+        async def player_pool(self, league_id, season, week=None, **kw):
+            asked["pool"] += 1
+            return POOL
+
+    source = EspnSource(2026)
+    monkeypatch.setattr(source, "client", lambda: _Client())
+
+    class _League:
+        league_id = "999"
+        current_week = 1
+        roster_size = 9
+        teams = {
+            1: Team(roster_id=1, owner_id="a", display_name="A", team_name="A"),
+            2: Team(roster_id=2, owner_id="b", display_name="B", team_name="B"),
+        }
+
+    out = await source.draft_rosters(_League())
+    assert asked["pool"] == 0
+    assert out[1] == ["4034", "KC"]

@@ -201,6 +201,37 @@ def build_teams(
     return teams, unresolved
 
 
+def rosters_from_player_pool(
+    payload: dict | None, crosswalk: Crosswalk
+) -> dict[int, list[str]]:
+    """teamId -> its players, read from the player pool's ``onTeamId``.
+
+    Independent of both the roster view and the draft feed: every player says
+    which team owns them, so grouping by that rebuilds every roster. During a
+    live draft this is the fallback for when ESPN has allocated the draft board
+    but published no picks.
+    """
+    out: dict[int, list[str]] = {}
+    for row in (payload or {}).get("players") or []:
+        player = (row or {}).get("player") or {}
+        try:
+            team_id = int(row.get("onTeamId") or player.get("onTeamId") or 0)
+        except (TypeError, ValueError):
+            continue
+        if team_id <= 0:  # free agent or waivers
+            continue
+        position = position_of(player.get("defaultPositionId"))
+        sleeper_id = crosswalk.from_espn(
+            player.get("id") or row.get("id"),
+            name=_entry_name(player),
+            position=position or "",
+            team=team_of(player.get("proTeamId")),
+        )
+        if sleeper_id:
+            out.setdefault(team_id, []).append(str(sleeper_id))
+    return out
+
+
 def raw_entry_counts(payload: dict | None) -> dict[int, int]:
     """roster_id -> how many roster entries ESPN actually sent.
 
@@ -479,4 +510,5 @@ __all__ = [
     "normalize_team",
     "parse_slots",
     "raw_entry_counts",
+    "rosters_from_player_pool",
 ]

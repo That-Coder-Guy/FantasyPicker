@@ -172,8 +172,26 @@ class EspnSource:
     async def draft_rosters(self, league: LeagueContext) -> dict[int, list[str]]:
         async with self.client() as client:
             payload = await client.draft(league.league_id, self.season)
-        _, picks = _espn_draft(payload, league)
-        return picks_by_roster(picks)
+            _, picks = _espn_draft(payload, league)
+            by_roster = picks_by_roster(picks)
+            if by_roster:
+                return by_roster
+
+            # ESPN allocates the whole draft board up front and, at least in
+            # some live drafts, publishes no picks to the league resource while
+            # it runs. The player pool answers the same question from the other
+            # direction — every player names the team that owns them — so it is
+            # worth one more call before reporting an empty league.
+            pool = await client.player_pool(
+                league.league_id, self.season, league.current_week
+            )
+        from_pool = espn_league.rosters_from_player_pool(pool, _crosswalk())
+        if from_pool:
+            log.info(
+                "draft feed had no picks; rebuilt %d rosters from the player pool",
+                len(from_pool),
+            )
+        return from_pool
 
     async def draft_order(self, league: LeagueContext) -> dict[str, int]:
         async with self.client() as client:

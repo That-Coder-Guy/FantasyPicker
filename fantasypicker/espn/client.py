@@ -24,6 +24,7 @@ that difference.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -156,10 +157,17 @@ class EspnClient:
         return await self._fetch(client, url, league_id, 0 if fresh else ttl)
 
     async def _fetch(
-        self, client: httpx.AsyncClient, url: str, league_id: str, ttl: float
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        league_id: str,
+        ttl: float,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         try:
-            payload = await fetch_json(url, ttl, client=client, allow_404=True)
+            payload = await fetch_json(
+                url, ttl, client=client, allow_404=True, headers=headers
+            )
         except AuthError as exc:
             raise EspnAuthRequired(league_id, had_cookies=self.has_cookies) from exc
         # A past-season request answers with a single-element list.
@@ -236,6 +244,50 @@ class EspnClient:
             self._settings.ttl_draft,
             fresh=fresh,
         )
+
+    async def player_pool(
+        self,
+        league_id: str,
+        season: int,
+        week: int | None = None,
+        *,
+        statuses: tuple[str, ...] = ("ONTEAM",),
+        limit: int = 500,
+        fresh: bool = False,
+    ) -> dict | None:
+        """Players by roster status, straight from the player pool.
+
+        This is a different path to "who owns whom" than the draft feed: each
+        player carries ``onTeamId``, so filtering to ``ONTEAM`` reconstructs
+        every roster without reading a single pick. During a live draft, when
+        ESPN has not published picks to the league resource, this is the only
+        remaining way to see the board.
+
+        The query rides in the ``x-fantasy-filter`` header rather than the URL,
+        which is why the cache keys on headers too.
+        """
+        filters = {
+            "players": {
+                "filterStatus": {"value": list(statuses)},
+                "limit": limit,
+                "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+            }
+        }
+        url = self._url(
+            league_id,
+            season,
+            ("kona_player_info",),
+            scoringPeriodId=week,
+        )
+        headers = {"x-fantasy-filter": json.dumps(filters)}
+        client = self._client
+        ttl = 0 if fresh else self._settings.ttl_draft
+        if client is None:
+            async with httpx.AsyncClient(
+                timeout=self._settings.http_timeout, cookies=self._cookies()
+            ) as temp:
+                return await self._fetch(temp, url, league_id, ttl, headers=headers)
+        return await self._fetch(client, url, league_id, ttl, headers=headers)
 
     async def bundle(
         self, league_id: str, season: int, week: int | None = None

@@ -53,10 +53,13 @@ class AuthError(FetchError):
         super().__init__(f"{status_code} (not authorised) from {url}")
 
 
-def _paths(url: str, ext: str) -> tuple[Path, Path]:
+def _paths(url: str, ext: str, variant: str = "") -> tuple[Path, Path]:
     settings = get_settings()
     settings.ensure_dirs()
-    digest = hashlib.sha1(url.encode()).hexdigest()
+    # ``variant`` distinguishes requests that differ only by header — ESPN's
+    # player pool puts its query in x-fantasy-filter, so two different filters
+    # share a URL and would otherwise collide in the cache.
+    digest = hashlib.sha1((url + variant).encode()).hexdigest()
     return (
         settings.cache_dir / f"{digest}{ext}",
         settings.cache_dir / f"{digest}.meta.json",
@@ -102,13 +105,16 @@ async def fetch_json(
     *,
     client: httpx.AsyncClient | None = None,
     allow_404: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> Any:
     """GET ``url`` as JSON, honouring a disk cache with ``ttl`` seconds.
 
     ``allow_404`` returns ``None`` instead of raising for endpoints that
     legitimately 404 (a league with no draft, a week with no matchups).
     """
-    data_path, meta_path = _paths(url, ".json")
+    data_path, meta_path = _paths(
+        url, ".json", json.dumps(headers, sort_keys=True) if headers else ""
+    )
 
     if _fresh(meta_path, ttl) and data_path.exists():
         try:
@@ -121,7 +127,9 @@ async def fetch_json(
         timeout=get_settings().http_timeout, headers={"User-Agent": _USER_AGENT}
     )
     try:
-        payload = await _get_json_with_retry(client, url, allow_404=allow_404)
+        payload = await _get_json_with_retry(
+            client, url, allow_404=allow_404, headers=headers
+        )
     except AuthError:
         raise  # never mask an expired credential behind stale data
     except FetchError:
@@ -142,13 +150,17 @@ async def fetch_json(
 
 
 async def _get_json_with_retry(
-    client: httpx.AsyncClient, url: str, *, allow_404: bool
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    allow_404: bool,
+    headers: dict[str, str] | None = None,
 ) -> Any:
     settings = get_settings()
     last: Exception | None = None
     for attempt in range(settings.max_retries):
         try:
-            resp = await client.get(url, follow_redirects=True)
+            resp = await client.get(url, follow_redirects=True, headers=headers)
             if resp.status_code == 404 and allow_404:
                 return None
             if resp.status_code in (401, 403):

@@ -254,6 +254,9 @@ def _doctor_espn(
             except EspnAuthRequired as exc:
                 print(str(exc), file=sys.stderr)
                 return 1
+            if not payload:
+                print(str(EspnLeagueNotFound(league_id, year)), file=sys.stderr)
+                return 1
         if not payload:
             print(str(EspnLeagueNotFound(league_id, year)), file=sys.stderr)
             return 1
@@ -320,9 +323,7 @@ def _doctor_espn(
             if not made:
                 print(
                     "\n  ESPN has allocated the draft board but published no "
-                    "picks to this API yet. If picks have genuinely been made "
-                    "in the draft room, ESPN is not exposing them here in real "
-                    "time and rosters will fill in once it does.",
+                    "picks to this API yet.",
                     file=sys.stderr,
                 )
             elif len(parsed) < len(made):
@@ -356,6 +357,25 @@ def _doctor_espn(
             )
 
         source = rosters or payload
+        # The player pool answers "who owns whom" independently of both the
+        # roster view and the draft feed, and is the last hope mid-draft.
+        from .espn.league import rosters_from_player_pool
+
+        pool = await client.player_pool(
+            league_id, year, None, fresh=True
+        )
+        pool_rosters = rosters_from_player_pool(pool, load_crosswalk())
+        pool_players = sum(len(v) for v in pool_rosters.values())
+        print(
+            f"\nplayer pool (onTeamId): {pool_players} players across "
+            f"{len(pool_rosters)} teams"
+        )
+        if pool_players:
+            print(
+                "  This is a working live source: rosters can be rebuilt from "
+                "it even when the draft feed is empty."
+            )
+
         teams, unresolved = build_teams(source, load_crosswalk())
         sent = raw_entry_counts(source)
         print(f"\nteams: {len(teams)}")

@@ -311,6 +311,22 @@ STAT_LABELS: dict[int, str] = {
 DST_ID_BASE = 16000
 
 
+def is_unmade_pick(espn_id: object) -> bool:
+    """Is this draft slot still empty?
+
+    ESPN pre-allocates the whole draft board and fills each slot in as the
+    pick is made, marking the ones still to come with ``playerId: -1``. They
+    are placeholders, not players, and counting them as unreadable makes a
+    draft that has not reached them look like a parsing failure.
+    """
+    try:
+        value = int(espn_id)
+    except (TypeError, ValueError):
+        return True
+    # Real ids are positive; defenses are large negatives (see DST_ID_BASE).
+    return value == 0 or value == -1
+
+
 def dst_team_from_player_id(espn_id: object) -> str | None:
     """The team abbreviation behind a synthetic D/ST player id, if it is one."""
     try:

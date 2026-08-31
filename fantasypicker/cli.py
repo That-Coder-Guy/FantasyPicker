@@ -296,25 +296,38 @@ def _doctor_espn(
                 teams = {}
                 roster_size = 0
 
+            from .espn.ids import is_unmade_pick
+
             _, parsed = _espn_draft(payload, _Stub())
             by_roster = picks_by_roster(parsed)
+            made = [p for p in raw_picks if not is_unmade_pick(p.get("playerId"))]
             print(
-                f"  picks readable as players: {len(parsed)} of {len(raw_picks)}"
+                f"  picks actually made: {len(made)} of {len(raw_picks)} slots "
+                f"(the rest are empty slots ESPN has not reached)"
             )
+            print(f"  of those, readable as players: {len(parsed)}")
             if by_roster:
                 counts = ", ".join(
                     f"team {rid}: {len(players)}"
                     for rid, players in sorted(by_roster.items())
                 )
                 print(f"  picks per team: {counts}")
-            for pick in raw_picks[:3]:
+            for pick in (made or raw_picks)[:3]:
                 print(
                     f"      team {pick.get('teamId')} took playerId "
                     f"{pick.get('playerId')} at #{pick.get('overallPickNumber')}"
                 )
-            if len(parsed) < len(raw_picks):
+            if not made:
                 print(
-                    f"  {len(raw_picks) - len(parsed)} picks could not be matched "
+                    "\n  ESPN has allocated the draft board but published no "
+                    "picks to this API yet. If picks have genuinely been made "
+                    "in the draft room, ESPN is not exposing them here in real "
+                    "time and rosters will fill in once it does.",
+                    file=sys.stderr,
+                )
+            elif len(parsed) < len(made):
+                print(
+                    f"  {len(made) - len(parsed)} made picks could not be matched "
                     "to a player and will be missing from rosters.",
                     file=sys.stderr,
                 )

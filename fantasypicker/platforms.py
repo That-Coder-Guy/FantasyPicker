@@ -25,7 +25,7 @@ from typing import Protocol
 from .credentials import EspnCredentials
 from .espn import league as espn_league
 from .espn.client import EspnClient
-from .espn.ids import dst_team_from_player_id
+from .espn.ids import dst_team_from_player_id, is_unmade_pick
 from .sleeper.client import SleeperClient
 from .sleeper.league import LeagueContext, refresh_teams
 
@@ -282,10 +282,17 @@ def _espn_draft(
             team_id = int(pick.get("teamId"))
         except (TypeError, ValueError):
             continue
+        if is_unmade_pick(pick.get("playerId")):
+            continue  # a slot the draft has not reached yet
         sleeper_id = crosswalk.from_espn(pick.get("playerId")) or (
             dst_team_from_player_id(pick.get("playerId"))
         )
         if not sleeper_id:
+            log.info(
+                "draft pick #%s (playerId %s) could not be matched to a player",
+                pick.get("overallPickNumber"),
+                pick.get("playerId"),
+            )
             continue
         try:
             pick_no = int(pick.get("overallPickNumber") or len(picks) + 1)

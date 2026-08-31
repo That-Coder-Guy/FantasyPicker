@@ -1065,3 +1065,41 @@ def test_applying_an_empty_draft_feed_changes_nothing():
 
     assert apply_draft_rosters(_League(), {}) is False
     assert apply_draft_rosters(_League(), {1: []}) is False
+
+
+def test_an_unmade_pick_is_a_placeholder_not_a_failure():
+    """ESPN pre-allocates the whole board and marks slots it has not reached
+    with playerId -1. Counting those as unreadable made a draft in its early
+    rounds look like a total parsing failure."""
+    from fantasypicker.espn.ids import is_unmade_pick
+
+    assert is_unmade_pick(-1) is True
+    assert is_unmade_pick(0) is True
+    assert is_unmade_pick(None) is True
+    assert is_unmade_pick(3139477) is False
+    assert is_unmade_pick(-16012) is False  # a defense, not a placeholder
+
+
+def test_unmade_picks_are_skipped_when_rebuilding_rosters(monkeypatch):
+    from fantasypicker.platforms import _espn_draft, picks_by_roster
+    from fantasypicker.sleeper.league import Team
+
+    monkeypatch.setattr("fantasypicker.platforms._crosswalk", crosswalk)
+    payload = json.loads(json.dumps(DRAFT_PAYLOAD))
+    payload["draftDetail"]["picks"] = [
+        {"teamId": 1, "playerId": 3139477, "overallPickNumber": 1},
+        {"teamId": 2, "playerId": -1, "overallPickNumber": 2},
+        {"teamId": 1, "playerId": -1, "overallPickNumber": 3},
+    ]
+
+    class _League:
+        teams = {
+            1: Team(roster_id=1, owner_id="a", display_name="A", team_name="A"),
+            2: Team(roster_id=2, owner_id="b", display_name="B", team_name="B"),
+        }
+        league_id = "999"
+        roster_size = 9
+
+    _, picks = _espn_draft(payload, _League())
+    assert len(picks) == 1
+    assert picks_by_roster(picks) == {1: ["4034"]}

@@ -171,6 +171,16 @@ def build_teams(
             elif slot_name not in BENCH_SLOTS:
                 starters.append(sleeper_id)
 
+        raw_entries = len((row.get("roster") or {}).get("entries") or [])
+        if raw_entries and not players:
+            # ESPN sent a roster and none of it survived translation. Silent,
+            # this reads as an empty team; loud, it names the actual problem.
+            log.warning(
+                "roster %s: ESPN sent %d entries, none could be read as players",
+                roster_id,
+                raw_entries,
+            )
+
         record = ((row.get("record") or {}).get("overall")) or {}
         teams[roster_id] = Team(
             roster_id=roster_id,
@@ -191,15 +201,63 @@ def build_teams(
     return teams, unresolved
 
 
+def raw_entry_counts(payload: dict | None) -> dict[int, int]:
+    """roster_id -> how many roster entries ESPN actually sent.
+
+    Compared against the players that survived translation, this separates
+    the two very different causes of an empty-looking team: ESPN returned
+    nothing, or ESPN returned something this app failed to read.
+    """
+    out: dict[int, int] = {}
+    for row in (payload or {}).get("teams") or []:
+        try:
+            roster_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        out[roster_id] = len((row.get("roster") or {}).get("entries") or [])
+    return out
+
+
+def _entry_player(entry: dict) -> dict:
+    """The player object on a roster entry, wherever ESPN put it.
+
+    Depending on the view, the player rides at ``playerPoolEntry.player`` or
+    directly at ``playerEntry.player``; some responses carry only the bare
+    ``playerId`` on the entry itself. Reading just the first shape means the
+    others silently become an empty roster.
+    """
+    for holder in ("playerPoolEntry", "playerEntry"):
+        player = (entry.get(holder) or {}).get("player")
+        if player:
+            return player
+    return entry.get("player") or {}
+
+
+def _entry_espn_id(entry: dict, player: dict) -> object:
+    return player.get("id") or entry.get("playerId")
+
+
+def _entry_name(player: dict) -> str:
+    name = str(player.get("fullName") or "").strip()
+    if name:
+        return name
+    parts = [
+        str(player.get("firstName") or "").strip(),
+        str(player.get("lastName") or "").strip(),
+    ]
+    return " ".join(p for p in parts if p).strip()
+
+
 def _resolve_entry(entry: dict, crosswalk: Crosswalk) -> tuple[str, str] | None:
-    player = ((entry.get("playerPoolEntry") or {}).get("player")) or {}
-    if not player:
+    player = _entry_player(entry)
+    espn_id = _entry_espn_id(entry, player)
+    if not espn_id and not player:
         return None
     position = position_of(player.get("defaultPositionId"))
     team = team_of(player.get("proTeamId"))
     sleeper_id = crosswalk.from_espn(
-        player.get("id"),
-        name=str(player.get("fullName") or ""),
+        espn_id,
+        name=_entry_name(player),
         position=position or "",
         team=team,
     )
@@ -210,13 +268,21 @@ def _resolve_entry(entry: dict, crosswalk: Crosswalk) -> tuple[str, str] | None:
 
 
 def _entry_description(entry: dict) -> dict | None:
-    player = ((entry.get("playerPoolEntry") or {}).get("player")) or {}
-    name = str(player.get("fullName") or "").strip()
-    if not name:
+    """Describe an entry we could not resolve, from whatever it does carry.
+
+    Never returns None for a real entry: an unresolved player that is also
+    unnameable used to disappear from both the roster and the unresolved
+    list, which showed up as a team with zero players and nothing to explain
+    why. An ESPN id alone is enough to report.
+    """
+    player = _entry_player(entry)
+    espn_id = _entry_espn_id(entry, player)
+    name = _entry_name(player)
+    if not espn_id and not name:
         return None
     return {
-        "espn_id": player.get("id"),
-        "name": name,
+        "espn_id": espn_id,
+        "name": name or f"ESPN player {espn_id}",
         "position": position_of(player.get("defaultPositionId")),
         "team": team_of(player.get("proTeamId")),
     }
@@ -232,11 +298,11 @@ def injury_map(payload: dict | None) -> dict[str, str]:
     out: dict[str, str] = {}
     for row in (payload or {}).get("teams") or []:
         for entry in ((row.get("roster") or {}).get("entries") or []):
-            player = ((entry.get("playerPoolEntry") or {}).get("player")) or {}
+            player = _entry_player(entry)
             position = position_of(player.get("defaultPositionId"))
             sleeper_id = crosswalk.from_espn(
-                player.get("id"),
-                name=str(player.get("fullName") or ""),
+                _entry_espn_id(entry, player),
+                name=_entry_name(player),
                 position=position or "",
                 team=team_of(player.get("proTeamId")),
             )
@@ -331,6 +397,21 @@ async def load_league(
     scoring = scoring_from_espn(settings.get("scoringSettings"))
 
     rosters = await client.rosters(league_id, season, week)
+    if not any(raw_entry_counts(rosters).values()):
+        # ESPN's roster view can answer with bare teams when asked without a
+        # scoring period. Retrying with the league's current week costs one
+        # cached call and is the difference between full rosters and an app
+        # that reports every team as empty.
+        retry_week = week or current_week(payload)
+        retried = await client.rosters(league_id, season, retry_week)
+        if any(raw_entry_counts(retried).values()):
+            log.info(
+                "ESPN returned no roster entries without a scoring period; "
+                "week %s has them",
+                retry_week,
+            )
+            rosters = retried
+
     crosswalk = load_crosswalk()
     teams, unresolved = build_teams(rosters or payload, crosswalk)
 
@@ -381,4 +462,5 @@ __all__ = [
     "matchup_rows",
     "normalize_team",
     "parse_slots",
+    "raw_entry_counts",
 ]

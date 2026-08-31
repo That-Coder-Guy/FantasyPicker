@@ -805,3 +805,111 @@ async def test_an_expired_cookie_during_refresh_is_reported_not_swallowed(monkey
     assert changed == {"rosters": False, "players": False}
     assert service.refresh_error is not None
     assert "espn_s2" in service.refresh_error
+
+
+# ------------------------------------------------- reading entries ESPN sends
+
+
+def test_a_player_carried_at_the_entry_level_is_still_read():
+    """Some ESPN responses put only playerId on the entry, with no nested
+    player object. Reading one shape only turned a full roster into zero
+    players — the team looked empty and nothing said why."""
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["roster"]["entries"] = [
+        {"lineupSlotId": 0, "playerId": 3139477},
+        {"lineupSlotId": 20, "playerId": 4241457},
+    ]
+    teams, unresolved = build_teams(payload, crosswalk())
+    assert teams[1].players == ["4034", "6794"]
+    assert teams[1].starters == ["4034"]
+    assert unresolved == []
+
+
+def test_a_player_under_playerentry_is_read_too():
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["roster"]["entries"] = [
+        {
+            "lineupSlotId": 0,
+            "playerEntry": {
+                "player": {"id": 3139477, "fullName": "Patrick Mahomes",
+                           "defaultPositionId": 1, "proTeamId": 12}
+            },
+        }
+    ]
+    teams, _ = build_teams(payload, crosswalk())
+    assert teams[1].players == ["4034"]
+
+
+def test_a_name_split_across_first_and_last_still_resolves():
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["roster"]["entries"] = [
+        {
+            "lineupSlotId": 0,
+            "playerPoolEntry": {
+                "player": {
+                    "id": 999999,  # not in the crosswalk; must fall back to name
+                    "firstName": "Patrick",
+                    "lastName": "Mahomes",
+                    "defaultPositionId": 1,
+                    "proTeamId": 12,
+                }
+            },
+        }
+    ]
+    xw = Crosswalk(name_to_sleeper={("patrick mahomes", "QB"): "4034"})
+    teams, unresolved = build_teams(payload, xw)
+    assert teams[1].players == ["4034"]
+    assert unresolved == []
+
+
+def test_an_unreadable_entry_is_reported_rather_than_vanishing():
+    """The bug behind "all teams have 0 players": an entry that resolved to
+    nothing and had no name disappeared from the roster AND from the
+    unresolved list, leaving no evidence it ever existed."""
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["roster"]["entries"] = [{"lineupSlotId": 0, "playerId": 424242}]
+    teams, unresolved = build_teams(payload, crosswalk())
+    assert teams[1].players == []
+    assert len(unresolved) == 1
+    assert unresolved[0]["espn_id"] == 424242
+
+
+def test_raw_entry_counts_separate_an_empty_roster_from_an_unread_one():
+    payload = json.loads(json.dumps(LEAGUE))
+    from fantasypicker.espn.league import raw_entry_counts
+
+    counts = raw_entry_counts(payload)
+    assert counts[1] == 2  # ESPN sent two
+    assert counts[2] == 0  # genuinely empty
+
+
+def test_a_roster_that_reads_as_empty_despite_entries_is_logged(caplog):
+    payload = json.loads(json.dumps(LEAGUE))
+    payload["teams"][0]["roster"]["entries"] = [{"lineupSlotId": 0, "playerId": 424242}]
+    with caplog.at_level("WARNING"):
+        build_teams(payload, crosswalk())
+    assert "none could be read as players" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_load_retries_with_the_week_when_rosters_come_back_bare():
+    """ESPN can answer the roster view with teams but no entries when no
+    scoring period is given. Accepting that reports every team as empty."""
+    bare = json.loads(json.dumps(LEAGUE))
+    for row in bare["teams"]:
+        row["roster"] = {"entries": []}
+    asked: list = []
+
+    class _Client:
+        async def league(self, league_id, season, *, fresh=False):
+            return LEAGUE
+
+        async def rosters(self, league_id, season, week=None, *, fresh=False):
+            asked.append(week)
+            return bare if week is None else LEAGUE
+
+    league, _ = await load_league(_Client(), "999", 2026)
+    assert asked == [None, 3]  # retried with the league's current week
+    # Two entries came back on the retry; the ids themselves come from the
+    # real crosswalk, so only the count is this test's business.
+    assert len(league.teams[1].players) == 2

@@ -233,7 +233,7 @@ def _doctor_espn(
     from .data.crosswalk import load_crosswalk
     from .data.nflverse import current_nfl_season
     from .espn.client import EspnAuthRequired, EspnClient, EspnLeagueNotFound
-    from .espn.league import build_teams, parse_slots
+    from .espn.league import build_teams, parse_slots, raw_entry_counts
     from .espn.scoring import describe_items, scoring_from_espn
 
     year = int(season or current_nfl_season())
@@ -297,13 +297,21 @@ def _doctor_espn(
                 file=sys.stderr,
             )
 
-        teams, unresolved = build_teams(rosters or payload, load_crosswalk())
+        source = rosters or payload
+        teams, unresolved = build_teams(source, load_crosswalk())
+        sent = raw_entry_counts(source)
         print(f"\nteams: {len(teams)}")
         for roster_id in sorted(teams):
             team = teams[roster_id]
+            # "N players" alone cannot distinguish an empty roster from one we
+            # failed to read, which is the whole question when it says zero.
+            entries = sent.get(roster_id, 0)
+            counts = f"{len(team.players):>2} players"
+            if entries != len(team.players):
+                counts += f" (ESPN sent {entries} entries)"
             print(
                 f"  roster {roster_id:<3} {team.label[:28]:<28} "
-                f"{team.record:<7} {len(team.players):>2} players "
+                f"{team.record:<7} {counts} "
                 f"· {team.manager}"
             )
             picture = team.avatar_url or "(none in ESPN response)"
@@ -314,6 +322,21 @@ def _doctor_espn(
             print(
                 "\nESPN returned no team logos for this league. The app shows "
                 "each team's initials instead; there is no picture to fetch.",
+                file=sys.stderr,
+            )
+        total_sent = sum(sent.values())
+        total_read = sum(len(t.players) for t in teams.values())
+        if total_sent and not total_read:
+            print(
+                f"\nESPN sent {total_sent} roster entries and none could be read. "
+                "That is a parsing failure in this app, not an empty league — "
+                "please report the league's roster response shape.",
+                file=sys.stderr,
+            )
+        elif not total_sent:
+            print(
+                "\nESPN sent no roster entries at all. Either the league has not "
+                "drafted, or the roster view was refused for these teams.",
                 file=sys.stderr,
             )
         if unresolved:

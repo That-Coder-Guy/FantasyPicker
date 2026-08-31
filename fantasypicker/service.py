@@ -336,6 +336,9 @@ class PickerService:
                 stage="connected", detail=league.name, progress=0.05
             )
         self.last_refresh = time.time()
+        # A draft in progress is the one case where the platform's own rosters
+        # are empty but the league is not: fill them before the first render.
+        await self.fill_from_draft()
         self._remember()
         return self.describe(state)
 
@@ -344,6 +347,36 @@ class PickerService:
             return await client.user(username)
 
     # -- staying current ---------------------------------------------------- #
+
+    async def fill_from_draft(self) -> bool:
+        """Fill empty rosters from the live draft feed. True when any changed.
+
+        Mid-draft neither platform has moved drafted players onto a roster
+        yet, so the pick feed is the only live account of who owns whom.
+
+        This runs at connect as well as on refresh, because connecting stamps
+        the refresh clock — without it the first view of the League or Draft
+        page after connecting showed empty teams until the throttle expired,
+        which is exactly when someone mid-draft is looking.
+        """
+        league = self.league
+        if league is None or not league.teams:
+            return False
+        if all(team.players for team in league.teams.values()):
+            return False  # nothing empty to fill
+        try:
+            drafted = await self.source.draft_rosters(league)
+        except (FetchError, ValueError, EspnAuthRequired) as exc:
+            log.debug("draft feed unavailable: %s", exc)
+            return False
+        if not apply_draft_rosters(league, drafted):
+            return False
+        league._matchup_cache.clear()
+        log.info(
+            "filled %d rosters from the live draft feed",
+            sum(1 for v in drafted.values() if v),
+        )
+        return True
 
     async def refresh_live(self, *, force: bool = False) -> dict[str, bool]:
         """Re-pull the things that move during a week.
@@ -373,20 +406,8 @@ class PickerService:
             async with SleeperClient() as client:
                 players = await client.players(fresh=force)
 
-            # Mid-draft, neither platform has moved drafted players onto a
-            # roster yet, so the pick feed is the only live account of who owns
-            # whom. Filling empty rosters from it is what lets the League,
-            # Trades and waiver views work during a draft instead of showing
-            # twelve empty teams.
-            if any(not t.players for t in self.league.teams.values()):
-                try:
-                    drafted = await self.source.draft_rosters(self.league)
-                except (FetchError, ValueError) as exc:
-                    log.debug("draft feed unavailable: %s", exc)
-                else:
-                    if apply_draft_rosters(self.league, drafted):
-                        changed["rosters"] = True
-                        self.league._matchup_cache.clear()
+            if await self.fill_from_draft():
+                changed["rosters"] = True
         except (FetchError, EspnAuthRequired) as exc:
             # Never fail a page because a refresh could not reach the platform;
             # the previous state is stale but still useful. But say so where the

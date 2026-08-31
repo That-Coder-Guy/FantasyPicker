@@ -259,6 +259,7 @@ def _doctor_espn(
             return 1
 
         settings = payload.get("settings") or {}
+        league_id_value = league_id
         stored = describe_credentials(league_id)
         print(f"{settings.get('name') or payload.get('name')}  ({league_id})")
         print(
@@ -277,6 +278,46 @@ def _doctor_espn(
         drafted = has_drafted(payload)
         if drafted is not None:
             print(f"  draft: {'complete' if drafted else 'not yet drafted'}")
+
+        # The pick feed is what fills rosters while a draft runs, so when the
+        # pages look empty mid-draft this is the thing to look at.
+        detail = payload.get("draftDetail") or {}
+        raw_picks = detail.get("picks") or []
+        print(f"  draft picks in feed: {len(raw_picks)}", end="")
+        if detail.get("inProgress"):
+            print("  (draft in progress)")
+        else:
+            print()
+        if raw_picks:
+            from .platforms import _espn_draft, picks_by_roster
+
+            class _Stub:
+                league_id = league_id_value
+                teams = {}
+                roster_size = 0
+
+            _, parsed = _espn_draft(payload, _Stub())
+            by_roster = picks_by_roster(parsed)
+            print(
+                f"  picks readable as players: {len(parsed)} of {len(raw_picks)}"
+            )
+            if by_roster:
+                counts = ", ".join(
+                    f"team {rid}: {len(players)}"
+                    for rid, players in sorted(by_roster.items())
+                )
+                print(f"  picks per team: {counts}")
+            for pick in raw_picks[:3]:
+                print(
+                    f"      team {pick.get('teamId')} took playerId "
+                    f"{pick.get('playerId')} at #{pick.get('overallPickNumber')}"
+                )
+            if len(parsed) < len(raw_picks):
+                print(
+                    f"  {len(raw_picks) - len(parsed)} picks could not be matched "
+                    "to a player and will be missing from rosters.",
+                    file=sys.stderr,
+                )
 
         slots, bench = parse_slots(settings.get("rosterSettings"))
         print(f"\nstarting lineup: {', '.join(s.name for s in slots)}  (+{bench} bench)")

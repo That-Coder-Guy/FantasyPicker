@@ -431,3 +431,63 @@ async def test_a_live_draft_populates_the_league_page(monkeypatch):
     assert changed["rosters"] is True
     assert league.teams[1].players == ["100", "200"]
     assert league.teams[2].players == ["300"]
+
+
+@pytest.mark.asyncio
+async def test_connecting_mid_draft_fills_rosters_before_the_first_render(monkeypatch):
+    """Connecting stamps the refresh clock, so the throttle would otherwise
+    suppress the draft fill for the next thirty seconds — exactly the window
+    someone mid-draft is staring at the League and Draft pages."""
+    from fantasypicker.service import PickerService
+
+    league = await load_league(
+        SleeperClient(httpx.AsyncClient(transport=stub_transport())),
+        "999",
+        username="alice",
+    )
+    for team in league.teams.values():
+        team.players = []
+
+    class _Source:
+        platform = "sleeper"
+
+        async def draft_rosters(self, league):
+            return {1: ["100", "200"], 2: ["300"]}
+
+    service = PickerService()
+    service.league = league
+    service.source = _Source()
+
+    assert await service.fill_from_draft() is True
+    assert league.teams[1].players == ["100", "200"]
+    assert league.teams[2].players == ["300"]
+
+    # A second pass is a no-op, which is what lets the platform's real rosters
+    # take over untouched once the draft ends.
+    assert await service.fill_from_draft() is False
+
+
+@pytest.mark.asyncio
+async def test_filling_from_the_draft_is_skipped_when_rosters_are_full():
+    """No wasted call to the draft endpoint outside a draft."""
+    from fantasypicker.service import PickerService
+
+    league = await load_league(
+        SleeperClient(httpx.AsyncClient(transport=stub_transport())),
+        "999",
+        username="alice",
+    )
+    called = {"n": 0}
+
+    class _Source:
+        platform = "sleeper"
+
+        async def draft_rosters(self, league):
+            called["n"] += 1
+            return {}
+
+    service = PickerService()
+    service.league = league
+    service.source = _Source()
+    assert await service.fill_from_draft() is False
+    assert called["n"] == 0

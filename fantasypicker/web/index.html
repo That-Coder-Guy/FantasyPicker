@@ -24,6 +24,8 @@
     <span class="dot" id="live-dot"></span>
     <span id="live-label">live</span>
   </div>
+  <button class="ghost units-button" id="units-button" hidden
+          title="What every number on screen is measured in">Units</button>
   <nav class="tabs" id="tabs" hidden>
     <button class="tab" data-view="draft">Draft</button>
     <button class="tab" data-view="matchup">Matchup</button>
@@ -145,6 +147,7 @@
 
   <!-- Draft ------------------------------------------------------------ -->
   <section id="view-draft" class="view">
+    <div class="unit-legend" id="draft-legend"></div>
     <div class="toolbar">
       <div id="draft-status" class="pill-row"></div>
       <label class="toggle">
@@ -177,6 +180,7 @@
 
   <!-- Matchup ---------------------------------------------------------- -->
   <section id="view-matchup" class="view">
+    <div class="unit-legend" id="matchup-legend"></div>
     <div class="toolbar">
       <label>Week <input type="number" id="matchup-week" min="1" max="18" style="width:4.5rem"></label>
       <label>Opponent lineup
@@ -218,6 +222,7 @@
 
   <!-- League ----------------------------------------------------------- -->
   <section id="view-teams" class="view">
+    <div class="unit-legend" id="teams-legend"></div>
     <div class="toolbar">
       <label>Week <input type="number" id="teams-week" min="1" max="18" style="width:4.5rem"></label>
       <label>Lineup
@@ -235,6 +240,7 @@
 
   <!-- Board ------------------------------------------------------------ -->
   <section id="view-board" class="view">
+    <div class="unit-legend" id="board-legend"></div>
     <div class="toolbar">
       <div class="pill-row" id="board-filters"></div>
       <input id="board-search" placeholder="Search players" class="search">
@@ -246,6 +252,7 @@
 
   <!-- Waivers ---------------------------------------------------------- -->
   <section id="view-waivers" class="view">
+    <div class="unit-legend" id="waivers-legend"></div>
     <div class="toolbar">
       <button id="waivers-refresh" class="ghost">Refresh</button>
     </div>
@@ -258,6 +265,7 @@
 
   <!-- Drops ------------------------------------------------------------ -->
   <section id="view-drops" class="view">
+    <div class="unit-legend" id="drops-legend"></div>
     <div class="toolbar">
       <button id="drops-refresh" class="ghost">Refresh</button>
       <span class="muted small">
@@ -282,6 +290,8 @@
 
   <!-- Trades ----------------------------------------------------------- -->
   <section id="view-trades" class="view">
+    <div class="unit-legend" id="trades-legend"></div>
+    <div class="card market-key" id="trades-market-key"></div>
     <div class="toolbar">
       <button id="trades-refresh" class="ghost">Refresh</button>
       <span class="muted small">
@@ -290,7 +300,6 @@
         on their numbers as well as yours.
       </span>
     </div>
-    <div class="card market-key" id="trades-market-key"></div>
     <div class="card" id="trades-chains-card" hidden>
       <h2>Trade chains</h2>
       <p class="muted small">
@@ -308,6 +317,7 @@
 
   <!-- Model ------------------------------------------------------------ -->
   <section id="view-model" class="view">
+    <div class="unit-legend" id="model-legend"></div>
     <div class="card" id="model-card"></div>
   </section>
 </main>

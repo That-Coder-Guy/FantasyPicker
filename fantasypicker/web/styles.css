@@ -336,6 +336,49 @@ table th.num-col { font-family: inherit; }
 .trade-chain-step { margin-left: .6rem; }
 .chain-step-label { font-size: .75rem; text-transform: uppercase; margin: .4rem 0 .2rem; }
 
+/* Units -------------------------------------------------------------------
+ * Every number in this app is points, probability, a rank or a count, and they
+ * are not interchangeable. The unit is set in the same monospace the numbers
+ * use, so a label reads as belonging to a column of figures rather than as
+ * more prose. */
+.unit-legend {
+  display: flex; flex-wrap: wrap; gap: .3rem .9rem; align-items: baseline;
+  padding: .45rem .7rem; margin-bottom: .7rem;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.unit-legend:empty { display: none; }
+.legend-item { display: inline-flex; align-items: baseline; gap: .35rem; cursor: help; }
+.legend-unit {
+  font-family: var(--mono); font-size: .72rem; font-weight: 600;
+  color: var(--accent); white-space: nowrap;
+}
+.legend-name { font-size: .75rem; color: var(--muted); }
+
+/* Two-line numeric headers: the name, then what it is measured in. */
+.data th.num-col, .lineup th.num-col { line-height: 1.15; }
+.th-label { display: block; }
+.th-unit {
+  display: block; font-family: var(--mono); font-size: .66rem; font-weight: 400;
+  color: var(--accent); text-transform: none; letter-spacing: 0;
+  opacity: .85; margin-top: .1rem;
+}
+/* A unit appended to a standalone figure — a headline, a chip, a bar. */
+.num-unit {
+  font-family: var(--mono); font-size: .62rem; color: var(--muted);
+  margin-left: .25rem; font-weight: 400;
+}
+.valued { display: inline-flex; align-items: baseline; gap: .25rem; }
+.valued-number { font-family: var(--mono); }
+.valued-unit { font-family: var(--mono); font-size: .68rem; color: var(--muted); }
+.units-button { white-space: nowrap; }
+.glossary { margin: .6rem 0 0; }
+.glossary dt {
+  display: flex; align-items: baseline; gap: .5rem; margin-top: .7rem;
+}
+.glossary-name { font-weight: 600; }
+.glossary dd { margin: .15rem 0 0; color: var(--muted); font-size: .85rem; }
+
 /* Drops ------------------------------------------------------------------- */
 .drop-card {
   border: 1px solid var(--line); border-radius: var(--radius);

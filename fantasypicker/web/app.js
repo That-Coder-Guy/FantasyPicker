@@ -28,10 +28,140 @@ const fmt = (value, digits = 1) =>
   value === null || value === undefined || Number.isNaN(value) ? "–" : Number(value).toFixed(digits);
 const pct = (value, digits = 1) =>
   value === null || value === undefined ? "–" : `${(Number(value) * 100).toFixed(digits)}%`;
+/* ------------------------------------------------------------------ units
+ *
+ * Almost every number on screen is "points", and they are not the same points.
+ * A projection can be one week or the whole rest of the season; a gain can be
+ * points or win probability; ADP looks like a score but is a pick number where
+ * lower is better. Read the wrong one and the advice inverts.
+ *
+ * So units are declared once, here, and everything downstream — column
+ * headers, inline values, the per-page legend, the glossary — renders from
+ * this table. A unit cannot be labelled two ways on two pages because there is
+ * only one place to say it.
+ */
+const UNITS = {
+  ros: {
+    short: "ROS pts",
+    name: "Rest-of-season points",
+    help:
+      "Fantasy points from this week through the end of the regular season, " +
+      "under your league's own scoring. This is the currency for anything " +
+      "permanent — drafting, trading, dropping.",
+  },
+  week: {
+    short: "wk pts",
+    name: "One week's points",
+    help:
+      "Fantasy points for this single week only. Never compare these against " +
+      "rest-of-season points — a good week is around a fiftieth of a season.",
+  },
+  winp: {
+    short: "win %",
+    name: "Win probability",
+    help:
+      "Your chance of beating this specific opponent this week, from 20,000 " +
+      "simulated weeks with same-game correlations. Not a rating.",
+  },
+  play: {
+    short: "% to play",
+    name: "Chance of suiting up",
+    help:
+      "Probability the player is active this week, from his injury " +
+      "designation. Projections are conditional on playing; this is applied " +
+      "on top of them.",
+  },
+  pick: {
+    short: "pick #",
+    name: "Draft pick number",
+    help:
+      "Expert consensus rank — where the market expects him to go. Lower is " +
+      "earlier and better. This is a position in a queue, not a score.",
+  },
+  picks: {
+    short: "± picks",
+    name: "Spread in picks",
+    help:
+      "How much drafters disagree about him, as a standard deviation in pick " +
+      "numbers. A big number means he could go far earlier or later.",
+  },
+  weekno: {
+    short: "week #",
+    name: "Week of the season",
+    help: "A week number in the NFL calendar, 1 to 18.",
+  },
+  scored: {
+    short: "pts scored",
+    name: "Points actually scored",
+    help: "What this team has really put up so far this season. Not a projection.",
+  },
+  count: {
+    short: "count",
+    name: "A count",
+    help: "A plain tally — of managers, of players, or of games. Not points.",
+  },
+  err: {
+    short: "wk pts error",
+    name: "Error, in one week's points",
+    help:
+      "How far off a weekly projection was, measured in fantasy points. " +
+      "Lower is better.",
+  },
+  corr: {
+    short: "−1 to 1",
+    name: "Rank correlation",
+    help:
+      "How well the projected order matched the real order. 1 is perfect, 0 " +
+      "is coin-flipping. Unitless.",
+  },
+  share: {
+    short: "% share",
+    name: "Share of the whole",
+    help: "A percentage of a total, not a probability.",
+  },
+  tier: {
+    short: "tier",
+    name: "Tier",
+    help:
+      "Players grouped by where the real drop-offs in value are. Within a " +
+      "tier the choice is close; between tiers it is not.",
+  },
+};
+
 /* A header must sit over its column the way the cells do: a left-aligned
  * label above right-aligned numbers reads as two different columns. Mark
- * numeric columns with num("...") and the header inherits the alignment. */
-const num = (label) => ({ label, num: true });
+ * numeric columns with num("...") and the header inherits the alignment; pass
+ * a unit key and the header states it under the label. */
+const num = (label, unit) => ({ label, num: true, unit });
+
+/* Track which units a view has used, so the legend under it lists exactly
+ * those and never goes stale as a page changes. */
+function unitLegend(containerId, keys) {
+  const box = $(containerId);
+  if (!box) return;
+  box.innerHTML = "";
+  keys.filter((key) => UNITS[key]).forEach((key) => {
+    const unit = UNITS[key];
+    const item = el("span", "legend-item");
+    item.append(el("span", "legend-unit", unit.short));
+    item.append(el("span", "legend-name", unit.name));
+    item.title = unit.help;
+    box.append(item);
+  });
+}
+
+/* An inline value that carries its own unit — for the numbers that live in
+ * prose and cards rather than in a column with a header over it. */
+function valueWithUnit(text, key) {
+  const wrap = el("span", "valued");
+  wrap.append(el("span", "valued-number", text));
+  const unit = UNITS[key];
+  if (unit) {
+    wrap.append(el("span", "valued-unit", unit.short));
+    wrap.title = `${unit.name} — ${unit.help}`;
+  }
+  return wrap;
+}
 
 /* A team's picture, with the fallback most teams need: plenty of managers
  * never set one, and a CDN image can 404 after an avatar change. Either way
@@ -74,7 +204,24 @@ const tableHead = (labels) => {
   const row = el("tr");
   labels.forEach((label) => {
     const isNum = typeof label === "object" && label.num;
-    row.append(el("th", isNum ? "num-col" : null, isNum ? label.label : label));
+    if (!isNum) {
+      row.append(el("th", null, label));
+      return;
+    }
+    const cell = el("th", "num-col");
+    cell.append(el("span", "th-label", label.label));
+    // The unit goes in the header, under the name, rather than in a legend
+    // the reader has to look away to find. "Proj" alone is the ambiguity.
+    const unit = UNITS[label.unit];
+    if (unit) {
+      // "TIER / tier" is noise. When the column name already is the unit, the
+      // explanation still rides on the tooltip.
+      if (unit.short.toLowerCase() !== label.label.toLowerCase()) {
+        cell.append(el("span", "th-unit", unit.short));
+      }
+      cell.title = `${unit.name} — ${unit.help}`;
+    }
+    row.append(cell);
   });
   head.append(row);
   return head;
@@ -133,8 +280,21 @@ const LOADERS = {
   model: loadModel,
 };
 
+/* The units each view puts on screen, so its legend lists exactly those. */
+const VIEW_UNITS = {
+  draft: ["ros", "pick", "picks"],
+  matchup: ["winp", "week", "play"],
+  teams: ["week", "ros", "scored"],
+  board: ["ros", "tier", "pick", "picks", "weekno"],
+  waivers: ["ros", "week", "count"],
+  drops: ["ros"],
+  trades: ["ros"],
+  model: ["err", "corr", "count", "share"],
+};
+
 function setView(view) {
   state.view = view;
+  unitLegend(`${view}-legend`, VIEW_UNITS[view] || []);
   document.querySelectorAll(".view").forEach((section) => {
     section.classList.toggle("active", section.id === `view-${view}`);
   });
@@ -457,6 +617,7 @@ function applyLeague(league) {
   if (!league || !league.connected) return;
   renderSwitcher(league);
   $("tabs").hidden = false;
+  $("units-button").hidden = false;
   const bits = [
     league.name,
     `${league.teams} teams`,
@@ -586,8 +747,20 @@ function renderRecommendations(container, recommendations) {
     row.append(who);
 
     const num = el("div", "num");
-    num.append(el("b", null, fmt(player.marginal_value, 0)));
-    num.append(el("span", null, `${fmt(player.projected_points, 0)} pts · ADP ${fmt(player.ecr, 0)}`));
+    const headline = el("b");
+    headline.append(document.createTextNode(fmt(player.marginal_value, 0)));
+    headline.append(el("span", "num-unit", UNITS.ros.short));
+    headline.title =
+      `What he adds to your best lineup, in ${UNITS.ros.name.toLowerCase()}.`;
+    num.append(headline);
+    num.append(
+      el(
+        "span",
+        null,
+        `own ${fmt(player.projected_points, 0)} ${UNITS.ros.short} · ` +
+          `${UNITS.pick.short} ${fmt(player.ecr, 0)}`
+      )
+    );
     row.append(num);
 
     row.addEventListener("click", () => openPlayer(player.sleeper_id));
@@ -630,7 +803,10 @@ function renderRuns(runs) {
     fill.style.width = `${Math.max(2, (Math.abs(value) / max) * 100)}%`;
     bar.append(fill);
     row.append(bar);
-    row.append(el("span", "num-col", fmt(value, 0)));
+    const amount = el("span", "num-col");
+    amount.append(document.createTextNode(fmt(value, 0)));
+    amount.append(el("span", "num-unit", UNITS.ros.short));
+    row.append(amount);
     container.append(row);
   });
 }
@@ -662,21 +838,30 @@ function renderMatchupHeadline(container, data) {
   container.innerHTML = "";
   const prob = el("div", "winprob");
   prob.append(el("b", null, pct(data.win_probability, 0)));
+  prob.title = `${UNITS.winp.name} — ${UNITS.winp.help}`;
   prob.append(el("span", null, "win probability"));
   container.append(prob);
 
   const right = el("div");
   const score = el("div", "score-line");
+  // The two biggest numbers on the page after the win probability, and both
+  // are a single Sunday rather than a season.
   score.append(el("strong", null, `${data.my_team} ${fmt(data.my_distribution.mean)}`));
   score.append(el("span", "vs", "vs"));
-  score.append(document.createTextNode(`${data.opponent_team || "bye"} ${fmt(data.opponent_distribution.mean)}`));
+  score.append(
+    document.createTextNode(
+      `${data.opponent_team || "bye"} ${fmt(data.opponent_distribution.mean)}`
+    )
+  );
+  score.append(el("span", "num-unit", UNITS.week.short));
   right.append(score);
   right.append(
     el(
       "div",
       "muted small",
       `Your range: ${fmt(data.my_distribution.p10)} – ${fmt(data.my_distribution.p90)} ` +
-        `(80% of simulated weeks). Expected margin ${fmt(data.margin_distribution.mean)}.`
+        `${UNITS.week.short} (80% of simulated weeks). ` +
+        `Expected margin ${fmt(data.margin_distribution.mean)} ${UNITS.week.short}.`
     )
   );
   right.append(el("div", "strategy", data.strategy));
@@ -690,6 +875,9 @@ function renderLineup(table, lineup) {
     table.append(el("tr")).append(el("td", "muted", "No lineup available."));
     return;
   }
+  // A bare column of numbers beside a lineup is the most ambiguous thing on
+  // the page — a season total and a Sunday total look identical.
+  table.append(tableHead(["Slot", "Player", num("Proj", "week")]));
   const body = el("tbody");
   lineup.forEach((row) => {
     const tr = el("tr", "clickable");
@@ -709,7 +897,9 @@ function renderLeverage(data) {
   const block = $("leverage-block");
   block.innerHTML = "";
   if (!data.leverage_lineup || !data.leverage_gain) return;
-  block.append(el("h3", null, `Win-probability lineup (+${pct(data.leverage_gain, 1)})`));
+  block.append(
+    el("h3", null, `Win-probability lineup (+${pct(data.leverage_gain, 1)} ${UNITS.winp.short})`)
+  );
   block.append(
     el(
       "p",
@@ -737,13 +927,21 @@ function renderSwaps(swaps, players) {
     const row = el("div", "swap");
     const positive = swap.win_prob_delta >= 0;
     const delta = el("span", `delta ${positive ? "pos" : "neg"}`,
-      `${positive ? "+" : ""}${(swap.win_prob_delta * 100).toFixed(1)}%`);
+      `${positive ? "+" : ""}${(swap.win_prob_delta * 100).toFixed(1)} ${UNITS.winp.short}`);
+    delta.title = `${UNITS.winp.name} — ${UNITS.winp.help}`;
     row.append(delta);
     row.append(document.createTextNode(" start "));
     row.append(el("span", "starter-in", (names[swap.in] || {}).name || swap.in));
     row.append(document.createTextNode(" over "));
     row.append(el("span", "starter-out", (names[swap.out] || {}).name || swap.out));
-    row.append(el("span", "muted small", ` at ${swap.slot} (${swap.points_delta >= 0 ? "+" : ""}${fmt(swap.points_delta)} pts)`));
+    row.append(
+    el(
+      "span",
+      "muted small",
+      ` at ${swap.slot} (${swap.points_delta >= 0 ? "+" : ""}` +
+        `${fmt(swap.points_delta)} ${UNITS.week.short})`
+    )
+  );
     container.append(row);
   });
 }
@@ -753,7 +951,7 @@ function renderMatchupPlayers(players) {
   table.innerHTML = "";
   table.append(
     tableHead(
-      ["Player", "Pos", "Team", "Opp", num("Proj"), num("Floor"), num("Ceiling"), num("P(play)"), "Slot"]
+      ["Player", "Pos", "Team", "Opp", num("Proj", "week"), num("Floor", "week"), num("Ceiling", "week"), num("P(play)", "play"), "Slot"]
     )
   );
 
@@ -828,7 +1026,8 @@ function renderTeams() {
         : declared
         ? "Ranked by the lineup each manager currently has set. Teams that have not set one show their best possible instead."
         : `Ranked by the best lineup each roster could field — the honest measure of team strength, ` +
-          `independent of whether the manager has logged in. League average ${fmt(data.averages.projected_points)}.`
+          `independent of whether the manager has logged in. ` +
+          `League average ${fmt(data.averages.projected_points)} ${UNITS.week.short}.`
     )
   );
 
@@ -845,7 +1044,7 @@ function renderTeams() {
     title.append(el("span", "team-label", team.label));
     if (team.is_me) title.append(el("span", "tag", "you"));
     identity.append(title);
-    const meta = [team.owner, team.record, `${fmt(team.points_for, 0)} pts for`]
+    const meta = [team.owner, team.record, `${fmt(team.points_for, 0)} ${UNITS.scored.short}`]
       .filter(Boolean)
       .join(" · ");
     identity.append(el("div", "muted small", meta));
@@ -860,7 +1059,7 @@ function renderTeams() {
       score.append(el("span", null, team.draft_slot ? "draft slot" : "no slot yet"));
     } else {
       score.append(el("b", null, fmt(points)));
-      score.append(el("span", null, "projected"));
+      score.append(el("span", null, `projected ${UNITS.week.short}`));
     }
     head.append(score);
     card.append(head);
@@ -872,6 +1071,7 @@ function renderTeams() {
       return;
     }
     const table = el("table", "lineup compact");
+    table.append(tableHead(["Slot", "Player", "Opp", num("Proj", "week")]));
     const body = el("tbody");
     rows.forEach((player) => {
       const tr = el("tr", "clickable");
@@ -897,7 +1097,7 @@ function renderTeams() {
         el(
           "p",
           "muted small",
-          `Currently set to score ${fmt(team.declared_points)} — ` +
+          `Currently set to score ${fmt(team.declared_points)} ${UNITS.week.short} — ` +
             `${fmt(team.points_left_on_bench)} below what this roster could field.`
         )
       );
@@ -918,7 +1118,8 @@ function renderTeams() {
         chip.append(
           el("span", `delta ${delta >= 0 ? "pos" : "neg"}`, ` ${delta >= 0 ? "+" : ""}${fmt(delta, 0)}`)
         );
-        chip.title = `League average ${fmt(average, 0)}`;
+        chip.title =
+          `${UNITS.ros.name} at ${position}. League average ${fmt(average, 0)}.`;
       }
       strengths.append(chip);
     });
@@ -926,6 +1127,7 @@ function renderTeams() {
 
     if (showBench && team.bench.length) {
       const benchTable = el("table", "lineup compact bench");
+      benchTable.append(tableHead(["Slot", "Player", "Opp", num("Proj", "week")]));
       const benchBody = el("tbody");
       team.bench.slice(0, 10).forEach((player) => {
         const tr = el("tr", "clickable");
@@ -993,7 +1195,7 @@ function renderBoard() {
   table.innerHTML = "";
   table.append(
     tableHead(
-      ["#", "Player", "Pos", "Team", num("Proj"), num("VOR"), num("Tier"), num("ADP"), num("±"), num("Bye"), "Range"]
+      ["#", "Player", "Pos", "Team", num("Proj", "ros"), num("VOR", "ros"), num("Tier", "tier"), num("ADP", "pick"), num("±", "picks"), num("Bye", "weekno"), "Range"]
     )
   );
 
@@ -1061,7 +1263,7 @@ async function loadWaivers() {
     table.innerHTML = "";
     table.append(
       tableHead(
-        ["Player", "Pos", "Team", num("ROS pts"), num("Roster gain"), num("This week"), num("Adds (24h)"), "Note"]
+        ["Player", "Pos", "Team", num("Projected", "ros"), num("Roster gain", "ros"), num("This week", "week"), num("Adds (24h)", "count"), "Note"]
       )
     );
 
@@ -1102,7 +1304,7 @@ function dropPlayerLine(players, id, extra) {
   const line = el("span", "drop-player clickable");
   line.append(posSpan(info.position));
   line.append(el("span", null, ` ${info.name} `));
-  line.append(el("small", "muted", extra || `${fmt(info.ros_points, 0)} ros`));
+  line.append(el("small", "muted", extra || `${fmt(info.ros_points, 0)} ${UNITS.ros.short}`));
   line.addEventListener("click", () => openPlayer(id));
   return line;
 }
@@ -1135,7 +1337,7 @@ async function loadDrops() {
       swap.append(el("div", "drop-arrow muted", "→"));
       swap.append(inn);
       card.append(swap);
-      card.append(el("div", "drop-gain good", `+${fmt(row.gain, 1)} ros pts`));
+      card.append(el("div", "drop-gain good", `+${fmt(row.gain, 1)} ${UNITS.ros.short}`));
       card.append(el("p", "muted small", row.reason));
       list.append(card);
     });
@@ -1144,7 +1346,7 @@ async function loadDrops() {
     deadTable.innerHTML = "";
     if (data.dead_weight.length) {
       deadTable.append(
-        tableHead(["Player", "Pos", "Team", num("ROS pts"), num("Cost to cut"), "Why"])
+        tableHead(["Player", "Pos", "Team", num("Projected", "ros"), num("Cost to cut", "ros"), "Why"])
       );
       const body = el("tbody");
       data.dead_weight.forEach((row) => {
@@ -1291,7 +1493,7 @@ function tradeCard(players, trade, market) {
   card.append(grid);
 
   const gains = el("p", "trade-gains");
-  gains.append(el("span", "good", `You: +${fmt(trade.me.gain, 1)} ros pts`));
+  gains.append(el("span", "good", `You: +${fmt(trade.me.gain, 1)} ${UNITS.ros.short}`));
   gains.append(el("span", "muted", " · "));
   gains.append(el("span", null, `${trade.them.label}: +${fmt(trade.them.gain, 1)}`));
   card.append(gains);
@@ -1355,7 +1557,7 @@ async function loadTrades() {
     data.chains.forEach((chain, index) => {
       const wrap = el("div", "trade-chain");
       wrap.append(
-        el("h3", null, `Chain ${index + 1}: +${fmt(chain.total_gain, 1)} ros pts total`)
+        el("h3", null, `Chain ${index + 1}: +${fmt(chain.total_gain, 1)} ${UNITS.ros.short} total`)
       );
       chain.steps.forEach((step, si) => {
         const stepWrap = el("div", "trade-chain-step");
@@ -1408,7 +1610,7 @@ async function loadModel() {
     const table = el("table", "data");
     table.append(
       tableHead(
-        ["Pos", "Season", num("n"), num("MAE"), num("Baseline MAE"), num("RMSE"), num("Spearman"), num("Bias")]
+        ["Pos", "Season", num("n", "count"), num("MAE", "err"), num("Baseline MAE", "err"), num("RMSE", "err"), num("Spearman", "corr"), num("Bias", "err")]
       )
     );
     const body = el("tbody");
@@ -1459,7 +1661,11 @@ async function loadModel() {
       line.append(posSpan(position));
       line.append(
         document.createTextNode(
-          " " + features.slice(0, 8).map(([name, weight]) => `${name} ${(weight * 100).toFixed(0)}%`).join(", ")
+          " " +
+            features
+              .slice(0, 8)
+              .map(([name, weight]) => `${name} ${(weight * 100).toFixed(0)}% share`)
+              .join(", ")
         )
       );
       card.append(line);
@@ -1472,6 +1678,33 @@ async function loadModel() {
 /* ------------------------------------------------------------------ modal */
 
 $("modal-close").addEventListener("click", () => ($("player-modal").hidden = true));
+
+/* The full glossary, one click from anywhere. The per-page legend answers
+ * "what am I looking at"; this answers "what does the app ever mean by a
+ * number", including the units on whichever page you are not currently on. */
+$("units-button").addEventListener("click", () => {
+  const content = $("modal-content");
+  content.innerHTML = "";
+  content.append(el("h2", null, "What the numbers mean"));
+  content.append(
+    el(
+      "p",
+      "muted small",
+      "Every figure in this app is one of these. Column headers name their " +
+        "own unit; this is the whole list."
+    )
+  );
+  const list = el("dl", "glossary");
+  Object.values(UNITS).forEach((unit) => {
+    const term = el("dt");
+    term.append(el("span", "legend-unit", unit.short));
+    term.append(el("span", "glossary-name", unit.name));
+    list.append(term);
+    list.append(el("dd", null, unit.help));
+  });
+  content.append(list);
+  $("player-modal").hidden = false;
+});
 $("player-modal").addEventListener("click", (event) => {
   if (event.target.id === "player-modal") $("player-modal").hidden = true;
 });
@@ -1500,8 +1733,9 @@ async function openPlayer(sleeperId) {
         el(
           "p",
           null,
-          `${fmt(data.week.proj_mean)} points · floor ${fmt(data.week.floor)} · ceiling ${fmt(data.week.ceiling)} · ` +
-            `${pct(data.week.p_play, 0)} to play`
+          `${fmt(data.week.proj_mean)} ${UNITS.week.short} · ` +
+            `floor ${fmt(data.week.floor)} · ceiling ${fmt(data.week.ceiling)} · ` +
+            `${pct(data.week.p_play, 0)} ${UNITS.play.short}`
         )
       );
       if (data.week.opponent) {
@@ -1518,8 +1752,13 @@ async function openPlayer(sleeperId) {
     if (data.season) {
       content.append(el("h3", null, "Rest of season"));
       content.append(
-        el("p", null, `${fmt(data.season.exp_points, 0)} points over ${data.season.games || "?"} games` +
-          (data.season.bye_weeks ? ` · bye ${data.season.bye_weeks}` : ""))
+        el(
+          "p",
+          null,
+          `${fmt(data.season.exp_points, 0)} ${UNITS.ros.short} over ` +
+            `${data.season.games || "?"} games` +
+            (data.season.bye_weeks ? ` · bye ${data.season.bye_weeks}` : "")
+        )
       );
     }
     if (data.history && data.history.length) {
@@ -1529,12 +1768,16 @@ async function openPlayer(sleeperId) {
       data.history.forEach((game) => {
         const bar = el("div");
         bar.style.height = `${Math.max(2, (Math.max(game.points, 0) / max) * 100)}%`;
-        bar.title = `${game.season} wk ${game.week} vs ${game.opponent}: ${game.points}`;
+        bar.title =
+          `${game.season} wk ${game.week} vs ${game.opponent}: ` +
+          `${game.points} ${UNITS.week.short} scored`;
         spark.append(bar);
       });
       content.append(spark);
       const recent = data.history.slice(-6).map((game) => `${game.week}: ${fmt(game.points)}`).join("  ");
-      content.append(el("p", "muted small", recent));
+      content.append(
+        el("p", "muted small", `Week: points scored — ${recent}`)
+      );
     }
   } catch (error) {
     showError(content, error);

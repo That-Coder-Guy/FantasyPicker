@@ -476,6 +476,29 @@ Eight tabs:
 - **Model** — validation metrics, calibration, measured injury and correlation
   rates, and per-position feature importance. Everything above, checkable.
 
+### Every number says what it is
+
+Nearly everything on screen is "points", and they are not the same points. A
+projection can be one week or the whole rest of the season; a gain can be
+points or win probability; ADP looks like a score but is a pick number where
+lower is better. Read the wrong one and the advice inverts — the Waivers page
+alone puts a rest-of-season roster gain and a this-week gain in adjacent
+columns.
+
+So the units are stated three ways, from one definition each:
+
+- **In the column header.** Every numeric column names its unit under its
+  label — `PROJ` over `wk pts`, `ROSTER GAIN` over `ROS pts` — and hovering
+  gives the full definition.
+- **In a legend at the top of each page**, listing exactly the units that page
+  uses.
+- **In a glossary**, from the **Units** button in the header, covering every
+  unit the app has, including those on pages you are not looking at.
+
+Figures outside of tables — a headline, a chip, a bar — carry their unit
+inline. The vocabulary is defined once in `web/app.js`, so a unit cannot be
+labelled one way on one page and differently on another.
+
 Clicking any player anywhere opens their projection, game context, and last
 twenty games.
 
